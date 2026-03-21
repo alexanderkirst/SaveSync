@@ -372,6 +372,78 @@ def _game_id_plan_for_server_delta(
     return plan
 
 
+def _bootstrap_slot_map_ranked(
+    *,
+    slot_map: dict[str, str],
+    delta_by_rom: dict[str, dict[str, Any]],
+    rom_to_gid: dict[str, str],
+    remote: dict[str, dict[str, Any]],
+    gid_plan: dict[str, str | None],
+    log: Callable[[str], None],
+) -> bool:
+    """Fill missing Harmony-slot mappings with deterministic ranking and persist later."""
+    changed = False
+    owner_by_gid: dict[str, str] = {}
+    for hid, gid in slot_map.items():
+        if gid in remote:
+            owner_by_gid.setdefault(gid, hid)
+    remote_by_rom_sha: dict[str, list[str]] = {}
+    remote_by_sha256: dict[str, list[str]] = {}
+    for gid, meta in remote.items():
+        rsha = str(meta.get("rom_sha1") or "").strip().lower()
+        if rsha:
+            remote_by_rom_sha.setdefault(rsha, []).append(gid)
+        dsha = str(meta.get("sha256") or "").strip().lower()
+        if dsha:
+            remote_by_sha256.setdefault(dsha, []).append(gid)
+
+    seen_hid: set[str] = set()
+    for rom_sha, row in sorted(delta_by_rom.items(), key=lambda kv: kv[1].get("name") or ""):
+        hid = str(row["identifier"]).strip().lower()
+        if hid in seen_hid:
+            continue
+        seen_hid.add(hid)
+        if hid in slot_map and slot_map[hid] in remote:
+            continue
+
+        chosen: str | None = None
+        reason = ""
+        exact = remote_by_rom_sha.get(rom_sha.strip().lower(), [])
+        if len(exact) == 1:
+            chosen = exact[0]
+            reason = "exact rom_sha1"
+        if not chosen:
+            header_gid = rom_to_gid.get(hid) or rom_to_gid.get(rom_sha.strip().lower())
+            title_gid = remote_game_id_for_delta_title(str(row.get("name") or ""), remote, header_hint=header_gid)
+            if title_gid:
+                chosen = title_gid
+                reason = "title/filename hint"
+        if not chosen:
+            blob_path = row.get("save_blob")
+            if isinstance(blob_path, Path) and blob_path.is_file():
+                dsha = sha256_bytes(blob_path.read_bytes())
+                matches = remote_by_sha256.get(dsha, [])
+                if len(matches) == 1:
+                    chosen = matches[0]
+                    reason = "unique payload hash"
+        if not chosen:
+            planned = gid_plan.get(hid)
+            if planned and planned in remote:
+                chosen = planned
+                reason = "planner fallback"
+
+        if not chosen:
+            continue
+        owner = owner_by_gid.get(chosen)
+        if owner and owner != hid:
+            continue
+        slot_map[hid] = chosen
+        owner_by_gid[chosen] = hid
+        changed = True
+        log(f"[slot-map] learned {row.get('name')!r}: {hid} -> {chosen} ({reason})")
+    return changed
+
+
 @dataclass
 class TripleConfig:
     server_url: str
@@ -496,7 +568,15 @@ class TripleSync:
         saves = resp.json().get("saves", [])
         return {item["game_id"]: item for item in saves}
 
-    def _upload_server(self, game_id: str, data: bytes, filename: str, last_modified_utc: str) -> None:
+    def _upload_server(
+        self,
+        game_id: str,
+        data: bytes,
+        filename: str,
+        last_modified_utc: str,
+        *,
+        rom_sha1: str | None = None,
+    ) -> None:
         params = {
             "last_modified_utc": last_modified_utc,
             "sha256": sha256_bytes(data),
@@ -505,6 +585,8 @@ class TripleSync:
             "platform_source": "delta-folder-sync",
             "force": "1",
         }
+        if rom_sha1:
+            params["rom_sha1"] = rom_sha1
         if self.dry_run:
             self.log(f"[dry-run] PUT server {game_id} ({len(data)} B)")
             return
@@ -577,6 +659,15 @@ class TripleSync:
 
         gid_plan = _game_id_plan_for_server_delta(delta_by_rom, rom_to_gid, remote, colliding, self.log)
         slot_map = self._load_delta_slot_map()
+        if _bootstrap_slot_map_ranked(
+            slot_map=slot_map,
+            delta_by_rom=delta_by_rom,
+            rom_to_gid=rom_to_gid,
+            remote=remote,
+            gid_plan=gid_plan,
+            log=self.log,
+        ):
+            self._save_delta_slot_map(slot_map)
         if slot_map:
             for hid, gid in slot_map.items():
                 row = hid_rows.get(hid)
@@ -715,7 +806,7 @@ class TripleSync:
                     apply_bytes_to_delta(self.cfg.delta_root, did, data, self.cfg.backup_dir)
             else:
                 ts_iso = delta_modified_to_iso(meta_path)
-                self._upload_server(game_id, delta_bytes, mirror.name, ts_iso)
+                self._upload_server(game_id, delta_bytes, mirror.name, ts_iso, rom_sha1=rom_sha)
                 self._write_local_atomic(mirror, delta_bytes)
                 if not self.dry_run and not _delta_gamesave_metadata_is_consistent(meta_path, blob_path):
                     self.log(
@@ -745,14 +836,22 @@ class TripleSync:
             local_sha = sha256_bytes(path.read_bytes())
             meta = remote.get(game_id)
             if meta is None:
-                self._upload_server(game_id, path.read_bytes(), path.name, local_mtime_iso)
+                rom_sha1: str | None = None
+                rom = self._resolver.resolve_rom_path(path)
+                if rom and rom.is_file():
+                    rom_sha1 = _sha1_file(rom)
+                self._upload_server(game_id, path.read_bytes(), path.name, local_mtime_iso, rom_sha1=rom_sha1)
                 continue
             remote_sha = str(meta.get("sha256", "") or "")
             if remote_sha and local_sha == remote_sha:
                 continue
             remote_ts = _remote_cmp_ts(meta)
             if local_mtime_iso > remote_ts:
-                self._upload_server(game_id, path.read_bytes(), path.name, local_mtime_iso)
+                rom_sha1 = None
+                rom = self._resolver.resolve_rom_path(path)
+                if rom and rom.is_file():
+                    rom_sha1 = _sha1_file(rom)
+                self._upload_server(game_id, path.read_bytes(), path.name, local_mtime_iso, rom_sha1=rom_sha1)
 
         remote = self._list_remote()
         for game_id, meta in remote.items():
@@ -849,7 +948,7 @@ class TripleSync:
 
             if winner_name == "local":
                 lm = utc_iso_for_local_sav(path)
-                self._upload_server(game_id, local_bytes, path.name, lm)
+                self._upload_server(game_id, local_bytes, path.name, lm, rom_sha1=rs)
                 if not self.dry_run:
                     apply_bytes_to_delta(self.cfg.delta_root, did, local_bytes, self.cfg.backup_dir)
 
@@ -865,7 +964,7 @@ class TripleSync:
                 if not self.dry_run:
                     _touch_local(t_del)
                 ts_iso = datetime.fromtimestamp(t_del, tz=timezone.utc).replace(microsecond=0).isoformat()
-                self._upload_server(game_id, delta_bytes, path.name, ts_iso)
+                self._upload_server(game_id, delta_bytes, path.name, ts_iso, rom_sha1=rs)
 
 
 def main() -> None:

@@ -34,7 +34,7 @@ def test_newer_upload_replaces_older(tmp_path: Path) -> None:
     )
 
     store.upsert(game_id, old_data, old_meta)
-    effective, _, applied = store.upsert(game_id, new_data, new_meta)
+    effective, _, applied, _canonical = store.upsert(game_id, new_data, new_meta)
     assert applied is True
     assert effective.sha256 == new_meta.sha256
     assert store.get_bytes(game_id) == new_data
@@ -63,7 +63,7 @@ def test_older_client_timestamp_new_payload_still_replaces(tmp_path: Path) -> No
         size_bytes=len(older),
     )
     store.upsert(game_id, newer, newer_meta)
-    effective, _, applied = store.upsert(game_id, older, older_meta)
+    effective, _, applied, _canonical = store.upsert(game_id, older, older_meta)
     assert applied is True
     assert effective.sha256 == older_meta.sha256
     assert store.get_bytes(game_id) == older
@@ -90,7 +90,7 @@ def test_older_client_timestamp_same_payload_no_op(tmp_path: Path) -> None:
         size_bytes=len(data),
     )
     store.upsert(game_id, data, meta_newer)
-    effective, _, applied = store.upsert(game_id, data, meta_older_claim)
+    effective, _, applied, _canonical = store.upsert(game_id, data, meta_older_claim)
     assert applied is False
     assert effective.sha256 == meta_newer.sha256
 
@@ -118,7 +118,7 @@ def test_equal_timestamp_different_hash_marks_conflict(tmp_path: Path) -> None:
         size_bytes=len(b),
     )
     store.upsert(game_id, a, meta_a)
-    effective, conflict, applied = store.upsert(game_id, b, meta_b)
+    effective, conflict, applied, _canonical = store.upsert(game_id, b, meta_b)
     assert applied is True
     assert conflict is True
     assert effective.conflict is True

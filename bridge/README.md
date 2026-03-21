@@ -67,6 +67,55 @@ python3 delta_folder_server_sync.py --config config.delta_sync.json --once
 
 Only **`--once`** is built in; use cron/launchd or a loop for repeats.
 
+### How Delta title -> server `game_id` is matched (not guesswork)
+
+Matching is deterministic and ordered:
+
+1. **Pinned slot-map first** (`delta_slot_map_path`): if a Harmony slot id already maps to a server `game_id`, that wins.
+2. **Exact ROM fingerprint**: if server metadata has `rom_sha1` and it matches Delta ROM `sha1Hash`, use that `game_id`.
+3. **Title-derived key match** from Delta display name:
+   - sanitized slug (example: `pokescape-2.0.0`)
+   - collapsed slug with hyphens removed (example: `pokescape2.0.0`)
+   - reduced retail alias (drops words like `pokemon`, `version`) so names like `Pokemon Fire Red Version` can match `firered`
+4. **Filename-hint match**: compare those same normalized forms against server `filename_hint` stem (example: `FireRed.sav` -> `firered`).
+5. **Header-hint fallback**: if a retail title clearly matches a cartridge header id and that id exists on server, use it.
+6. **Unique payload-hash fallback** (bootstrap only): if exactly one server save has same payload `sha256`, map to it.
+
+If none of the above are unambiguous, the slot is skipped for safety and a `[skip-map]` line is logged.
+
+On first successful mapping, the bridge writes it to `delta_slot_map_path` so future runs stay stable even if titles collide.
+
+### Manual override when a slot is skipped
+
+If logs show `[skip-map] ... no server save mapped to this Delta slot`, you can force a mapping by pinning the Harmony slot id to a server `game_id`.
+
+1. Find the Harmony slot id:
+   - From logs: `[slot-map] learned 'Title': <harmony_id> -> ...`
+   - Or inspect Delta files: `GameSave-<harmony_id>-gameSave`
+2. Edit `delta_slot_map_path` JSON and add/update:
+
+```json
+{
+  "<harmony_id>": "<server_game_id>"
+}
+```
+
+Example:
+
+```json
+{
+  "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc": "firered",
+  "0f9a...": "redrocket"
+}
+```
+
+3. Run one sync pass (`--once`) or wait for the next sidecar interval.
+
+Notes:
+- Manual slot-map entries have priority and will override automatic title/header matching.
+- If `<server_game_id>` does not exist on the server, mapping is ignored and logged as stale.
+- Alternative override: create a dedicated server row first (e.g. `PUT /save/redrocket`), then rerun sync so auto-bootstrap can learn and persist the mapping.
+
 ### Same merge over the Dropbox HTTP API (no desktop client)
 
 Use **`delta_dropbox_api_sync.py`** when the Delta folder exists **only in Dropbox** and you want the [Dropbox HTTP API](https://www.dropbox.com/developers/documentation/http/documentation) (via the Python SDK). Same **repository-root `.env`** as **`DROPBOX_SETUP.md`**; set **`dropbox.remote_delta_folder`** in **`config.example.delta_dropbox_api.json`**. Each pass downloads the Harmony tree, merges, then uploads changed files.

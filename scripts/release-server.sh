@@ -10,7 +10,7 @@ IMAGE_TAG="gbasync-server:${VERSION}"
 mkdir -p "$DIST_DIR"
 
 echo "Building Docker image: $IMAGE_TAG"
-docker build -f server/Dockerfile -t "$IMAGE_TAG" "$ROOT_DIR"
+docker build -f "$ROOT_DIR/server/Dockerfile" -t "$IMAGE_TAG" "$ROOT_DIR"
 
 echo "Saving image tarball..."
 docker save "$IMAGE_TAG" -o "$DIST_DIR/gbasync-server-${VERSION}.tar"

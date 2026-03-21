@@ -35,6 +35,13 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def sha1_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha1(path.read_bytes()).hexdigest().lower()
+    except OSError:
+        return None
+
+
 @dataclass
 class Config:
     server_url: str
@@ -104,6 +111,11 @@ class SyncBridge:
             "filename_hint": path.name,
             "platform_source": "delta-bridge",
         }
+        rom_path = self._game_id_resolver.resolve_rom_path(path)
+        if rom_path and rom_path.is_file():
+            rom_sha1 = sha1_file(rom_path)
+            if rom_sha1:
+                params["rom_sha1"] = rom_sha1
         if self.dry_run:
             self.log(f"[dry-run] upload {path.name} -> {game_id}")
             return

@@ -206,6 +206,7 @@ def put_save(
     last_modified_utc: str = Query(...),
     sha256: str = Query(...),
     size_bytes: int = Query(...),
+    rom_sha1: str | None = Query(default=None, description="Optional ROM SHA-1 identity for canonical routing"),
     filename_hint: str | None = Query(default=None),
     platform_source: str | None = Query(default=None),
     client_clock_utc: str | None = Query(
@@ -227,6 +228,7 @@ def put_save(
         last_modified_utc=last_modified_utc,
         sha256=sha256,
         size_bytes=size_bytes,
+        rom_sha1=rom_sha1,
         filename_hint=filename_hint,
         platform_source=platform_source,
     )
@@ -235,14 +237,15 @@ def put_save(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="size_bytes mismatch")
 
     try:
-        effective, conflict, applied = store.upsert(game_id, body, meta, force=force)
+        effective, conflict, applied, canonical_game_id = store.upsert(game_id, body, meta, force=force)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     resp = JSONResponse(
         status_code=200,
         content={
-            "game_id": game_id,
+            "game_id": canonical_game_id,
+            "requested_game_id": game_id,
             "saved": True,
             "applied": applied,
             "conflict": conflict,

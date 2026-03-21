@@ -15,6 +15,7 @@ class SaveMeta(BaseModel):
     version: int = 0
     sha256: str
     size_bytes: int
+    rom_sha1: str | None = None
     filename_hint: str | None = None
     platform_source: str | None = None
     conflict: bool = False
@@ -27,6 +28,18 @@ class SaveMeta(BaseModel):
             raise ValueError("game_id cannot be empty")
         return v
 
+    @field_validator("rom_sha1")
+    @classmethod
+    def validate_rom_sha1(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        v = value.strip().lower()
+        if not v:
+            return None
+        if len(v) != 40 or any(ch not in "0123456789abcdef" for ch in v):
+            raise ValueError("rom_sha1 must be a 40-char hex SHA-1")
+        return v
+
 
 class SaveListItem(BaseModel):
     game_id: str
@@ -35,6 +48,7 @@ class SaveListItem(BaseModel):
     version: int = 0
     sha256: str
     size_bytes: int
+    rom_sha1: str | None = None
     filename_hint: str | None = None
     platform_source: str | None = None
     conflict: bool = False

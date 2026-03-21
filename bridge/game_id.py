@@ -48,9 +48,37 @@ def remote_game_id_for_delta_title(
     collapsed = base.replace("-", "")
     if collapsed != base:
         candidates.append(collapsed)
+    # Delta retail titles often include boilerplate words that are not present in server ids
+    # (e.g. "pokemon-fire-red-version" vs "firered"). Try reduced title aliases too.
+    stop_words = {"pokemon", "version", "the", "game", "edition"}
+    title_parts = [p for p in base.split("-") if p and p not in stop_words]
+    if title_parts:
+        reduced = "-".join(title_parts)
+        if reduced and reduced not in candidates:
+            candidates.append(reduced)
+        reduced_collapsed = "".join(title_parts)
+        if reduced_collapsed and reduced_collapsed not in candidates:
+            candidates.append(reduced_collapsed)
+    # Also compare against filename stems from remote metadata (e.g. FireRed.sav -> firered).
+    remote_stem_map: dict[str, str] = {}
+    for gid, meta in remote.items():
+        if not isinstance(meta, dict):
+            continue
+        hint = str(meta.get("filename_hint") or "").strip()
+        if not hint:
+            continue
+        stem = Path(hint).stem
+        stem_slug = sanitize_game_id(stem)
+        if stem_slug:
+            remote_stem_map[stem_slug] = gid
+            stem_collapsed = stem_slug.replace("-", "")
+            if stem_collapsed:
+                remote_stem_map[stem_collapsed] = gid
     for nk in candidates:
         if nk and nk != "unknown-game" and nk in remote:
             return nk
+        if nk and nk in remote_stem_map:
+            return remote_stem_map[nk]
     if header_hint and header_hint in remote and title_looks_like_retail_for_header(name, header_hint):
         return header_hint
     return None

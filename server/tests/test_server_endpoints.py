@@ -127,3 +127,43 @@ def test_list_saves_omits_index_without_blob(tmp_path: Path) -> None:
     listed = client.get("/saves", headers=_auth_headers())
     assert listed.status_code == 200
     assert listed.json()["saves"] == []
+
+
+def test_rom_sha1_routes_legacy_alias_to_canonical(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    rom_sha1 = "a" * 40
+
+    first = b"one"
+    first_params = {
+        "last_modified_utc": "2026-03-17T21:00:00+00:00",
+        "sha256": hashlib.sha256(first).hexdigest(),
+        "size_bytes": len(first),
+        "filename_hint": "Pokemon Emerald.sav",
+        "platform_source": "test",
+        "rom_sha1": rom_sha1,
+    }
+    put_first = client.put("/save/pokemon-emer-bpee", params=first_params, content=first, headers=_auth_headers())
+    assert put_first.status_code == 200
+    assert put_first.json()["game_id"] == "pokemon-emer-bpee"
+
+    second = b"two"
+    second_params = {
+        "last_modified_utc": "2026-03-18T21:00:00+00:00",
+        "sha256": hashlib.sha256(second).hexdigest(),
+        "size_bytes": len(second),
+        "filename_hint": "Emerald.sav",
+        "platform_source": "test",
+        "rom_sha1": rom_sha1,
+    }
+    put_second = client.put("/save/emerald", params=second_params, content=second, headers=_auth_headers())
+    assert put_second.status_code == 200
+    assert put_second.json()["game_id"] == "pokemon-emer-bpee"
+
+    get_alias = client.get("/save/emerald", headers=_auth_headers())
+    assert get_alias.status_code == 200
+    assert get_alias.content == second
+
+    listed = client.get("/saves", headers=_auth_headers())
+    assert listed.status_code == 200
+    ids = [item["game_id"] for item in listed.json()["saves"]]
+    assert ids == ["pokemon-emer-bpee"]

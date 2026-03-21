@@ -204,6 +204,38 @@ def test_hack_with_dedicated_server_row_gets_own_id() -> None:
     assert plan["HID_HACK"] == "redrocket"
 
 
+def test_retail_title_can_map_to_friendly_server_id_without_header_id() -> None:
+    """Regression: retail title should map to `firered` when server uses friendly ids."""
+
+    def log(msg: str) -> None:
+        pass
+
+    remote = {
+        "firered": {"sha256": "x", "filename_hint": "FireRed.sav"},
+        "redrocket": {"sha256": "y", "filename_hint": "RedRocket.sav"},
+    }
+    colliding = {"pokemon-fire-bpre"}
+    rom_to_gid = {
+        "aaa111": "pokemon-fire-bpre",
+        "bbb222": "pokemon-fire-bpre",
+    }
+    delta_by_rom = {
+        "aaa111": {
+            "identifier": "HID_RETAIL",
+            "name": "Pokémon: Fire Red Version",
+        },
+        "bbb222": {
+            "identifier": "HID_HACK",
+            "name": "RedRocket",
+        },
+    }
+
+    plan = _game_id_plan_for_server_delta(delta_by_rom, rom_to_gid, remote, colliding, log)
+
+    assert plan["HID_RETAIL"] == "firered"
+    assert plan["HID_HACK"] == "redrocket"
+
+
 def test_dedupe_duplicate_server_id_keeps_explicit_name_match() -> None:
     plan = {"h1": "redrocket", "h2": "redrocket", "h3": "redrocket"}
     delta_by_rom = {
