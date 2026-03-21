@@ -9,11 +9,12 @@ Console-focused release: **Auto sync preview**, **status + locks**, **admin web 
 | Asset | Contents |
 |--------|----------|
 | **`server-v0.1.6.zip`** | Docker image `gbasync-server-v0.1.6.tar`, `docker-compose.yml`, `.env.example`, `README.txt` |
-| **`gbasync-bridge-v0.1.6.zip`** | Desktop / Delta bridge package (same as `dist/bridge/gbasync-bridge-v0.1.6.zip`) |
 | **`gbasync-switch-v0.1.6.zip`** | `gbasync.nro`, `.nacp`, `.elf`, `INSTALL.txt`, sample `gba-sync/config.ini` |
 | **`gbasync-3ds-v0.1.6.zip`** | `gbasync.3dsx`, `gbasync.cia`, `.smdh`, `INSTALL.txt`, sample `gba-sync/config.ini` |
 
 Archive paths inside the zips match the **`dist/...`** layout used in **v0.1.5** (e.g. `dist/switch/gbasync-switch-v0.1.6/...`).
+
+**Bridge** (desktop / Delta) is **not** a default GitHub attachment: build from source with `./scripts/release-bridge.sh` if you need `dist/bridge/gbasync-bridge-v*.zip`.
 
 **Admin UI:** bundled **inside** the Docker image (`admin-web`); no extra zip. Set **`GBASYNC_ADMIN_PASSWORD`** in `.env` and open **`/admin/ui/`**.
 

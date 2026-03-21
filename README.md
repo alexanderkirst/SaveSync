@@ -1,72 +1,83 @@
 # GBAsync
 
-Cross-platform GBA save synchronization across:
+**Keep one GBA save in sync across your devices**—your phone, your handhelds, and anything else you use to play. GBAsync is a small **self-hosted** service: you run a server that holds the “official” copy of each `.sav`, and **homebrew apps** on **Nintendo Switch** and **Nintendo 3DS** (plus an optional **desktop bridge** for **Delta** on iOS) push and pull saves when *you* choose—so you can pick up the same game on different hardware without emailing files or copying SD cards by hand.
 
-- Nintendo Switch (homebrew)
-- Nintendo 3DS (homebrew)
-- Delta on iOS (through a desktop bridge)
+---
 
-GBAsync lets you continue the same GBA game on different devices by syncing `.sav` files through a self-hosted server.
+## What you get
 
-## Why This Project
+- **One place for saves** — The server stores each game’s save file and metadata. Your devices sync **to** and **from** that source of truth.
+- **Works across emulators and real hardware targets** — Same idea whether you’re on Switch, 3DS, or (with the bridge) Delta on iPhone: **one shared system**, not a separate cloud per app.
+- **You stay in control** — **Self-hosted**: your machine, your network, your API keys. No vendor lock-in for *how* you sync GBA saves.
+- **Clear sync flows** — **Auto sync** walks through **plan → preview → apply** so you see what would change before it happens. **Upload-only** and **download-only** modes are there when you want a manual, per-game checklist.
+- **Per-game locks** — Mark games you don’t want touched in Auto, so a stray sync doesn’t overwrite something you care about.
+- **Status at a glance** — A small **status file** next to your saves shows last sync, whether the server was reachable, and Dropbox-related results when you use that integration.
+- **Conflicts handled explicitly** — If the copy on the device and the copy on the server both diverged, you get a **conflict** prompt instead of silent corruption.
+- **Optional web admin** — With a password set in config, you can open a simple **admin UI** in the browser (saves, conflicts, index tools, optional actions). Handy for troubleshooting without SSH.
 
-Delta has cloud sync, but it is Delta-specific. GBAsync provides one shared sync system across multiple emulators/hardware targets with a consistent server-side source of truth.
+---
 
-## Architecture
+## What it doesn’t try to be (yet)
 
-GBAsync uses a client-server model:
+- Console clients talk to the server over **plain HTTP** in this build—**no TLS** on the device side yet.
+- Sync on Switch/3DS is **foreground**: you open the app and run a sync; it’s not a background daemon.
 
-- `server/`: FastAPI backend that stores save binaries + metadata (optional **`admin-web/`** static UI under `/admin/ui/`)
-- `bridge/`: desktop sync bridge for Delta save folders
-- `switch-client/`: Switch homebrew sync app (`.nro`)
-- `3ds-client/`: 3DS homebrew sync app (`.3dsx`)
+Details and workarounds live in **`docs/USER_GUIDE.md`**.
 
-Clients support explicit overwrite sync actions for predictable cross-device transfer.
+---
 
-## Current Status
+## How it fits together (simple picture)
 
-- [x] Server MVP
-- [x] Delta bridge MVP
-- [x] Switch client MVP
-- [x] 3DS client MVP
-- [x] **Admin web UI** (optional; `GBASYNC_ADMIN_PASSWORD`, served at `/admin/ui/` — see `admin-web/README.md`)
-- [x] Release/packaging scripts
-- [x] End-user installation guides
+1. You run the **GBAsync server** (usually with Docker). It stores save files and an index.
+2. On **Switch** or **3DS**, you install the homebrew **client**, point it at your server in **`config.ini`**, and use the menus to sync.
+3. If you use **Delta** on iOS, you can optionally run the **desktop bridge** on a Mac or PC so a folder of `.sav` files stays in step with the server—**or** use **Dropbox-related modes** documented in the user guide so the server talks to Dropbox for you.
 
-## Quick Start
+Repository layout for contributors: **`server/`** (API + optional **`admin-web/`** UI), **`switch-client/`**, **`3ds-client/`**, **`bridge/`**.
 
-### 1) Start server
+---
+
+## Quick start
+
+**1. Start the server**
 
 ```bash
-cp .env.example .env   # repository root — server + optional Dropbox API keys
+cp .env.example .env
 cd server
 docker compose up -d
 ```
 
-With Docker, binary saves and `index.json` live in **`save_data/`** at the repo root (see `server/docker-compose.yml`). The image can also run **Dropbox sync in the background** - set `GBASYNC_DROPBOX_MODE` and related vars in the same root `.env` (see `docs/USER_GUIDE.md` §1). For upload-driven sync bursts, use `GBASYNC_DROPBOX_SYNC_ON_UPLOAD=true` with `GBASYNC_DROPBOX_SYNC_DEBOUNCE_SECONDS=10` and keep `GBASYNC_DROPBOX_INTERVAL_SECONDS` long as fallback.
-
-**Delta + `server_delta`:** The Dropbox API bridge only writes into Harmony `GameSave-*` slots that **already exist** for each ROM. Your 3DS upload goes to `/save/pokemon-fire-bpre`, but that blob is pushed to Dropbox **only** if Delta has a matching row—typically **Pokémon: Fire Red Version** (retail) with a save file. If your Dropbox folder only has BPRE *hacks* (e.g. Unbound, RedRocket) and no retail Fire Red entry, Fire Red’s server save will not appear in Delta until you open the retail game once in Delta (or use separate server ids per hack). Watch container logs for `[server_delta] note: server has /save/pokemon-fire-bpre but **no Delta GameSave row**`.
-
-Health check:
+Saves and `index.json` live under **`save_data/`** at the **repo root** (see `server/docker-compose.yml`). Check health:
 
 ```bash
 curl http://127.0.0.1:8080/health
 ```
 
-### 2) Delta / desktop bridge (optional if not using Docker Dropbox mode)
+**2. Install the console builds**
 
-```bash
-cd bridge
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp config.example.json config.json
-python bridge.py --config config.json --once
-```
+Prebuilt artifacts are described in **`dist/README.md`**. Each console zip includes an **`INSTALL.txt`**. Configure **`gba-sync/config.ini`** with your server URL and API key.
 
-### 3) Install console clients
+**3. Optional — Delta / bridge / Dropbox**
 
-Generate release artifacts:
+Not everyone needs this. If you sync with **Delta** or **Dropbox**, follow **`docs/USER_GUIDE.md`** (Dropbox modes, bridge setup, and Harmony/Delta quirks are explained there—not in this README).
+
+---
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| **`docs/USER_GUIDE.md`** | Full setup: server, bridge, Switch, 3DS, Dropbox, troubleshooting |
+| **`docs/RELEASE_NOTES_v0.1.6.md`** | What changed in the latest console-focused release |
+| **`dist/README.md`** | What’s in release zips and where files go |
+| **`admin-web/README.md`** | Enabling and using the optional admin UI (`/admin/ui/`) |
+| **`docs/TODO.md`** | What’s shipped vs planned |
+| **`docs/RELEASE.md`** | How maintainers build and package releases |
+
+---
+
+## Building from source
+
+Release scripts (from repo root; **devkitPro** required for Switch/3DS):
 
 ```bash
 ./scripts/release-server.sh v0.1.6
@@ -75,77 +86,22 @@ Generate release artifacts:
 ./scripts/release-3ds.sh v0.1.6
 ```
 
-Then use:
+**Toolchain:** Python 3.11+ (server/bridge), Docker (server), devkitPro (`devkitA64`/`libnx` for Switch, `devkitARM`/`libctru` for 3DS), plus 3DS packaging tools for **`./scripts/release-3ds.sh`** (`makerom`, `bannertool`; `sips` on macOS for banner assets). See **`docs/RELEASE.md`** for detail.
 
-- `dist/switch/.../INSTALL.txt`
-- `dist/3ds/.../INSTALL.txt`
-
-## Documentation
-
-- `docs/USER_GUIDE.md`: full setup and usage guide
-- `docs/TODO.md`: recently shipped items vs backlog
-- `docs/RELEASE_NOTES_v0.1.6.md`: **v0.1.6** console + admin UI release notes
-- `docs/RELEASE.md`: packaging and release workflow
-- `dist/README.md`: dist artifact glossary and install pointers
-- `server/README.md`: server API and run details
-- `docs/HARDWARE_VALIDATION_CHECKLIST.md`: real-device validation checklist
-- `PLAN.md`: implementation checklist and progress tracking
-- `IDEA.md`: project concept notes
-
-## Smoke Test Harness
-
-Run a local server+bridge smoke test:
+**Smoke test:**
 
 ```bash
 ./scripts/smoke-sync.sh
 ```
 
-This verifies upload and download flow in an isolated temp directory.
+---
 
-## Key Behaviors
+## Contributing
 
-- **A / Auto sync:** Uses **SHA-256** plus **`.gbasync-baseline`** on the device (legacy **`.savesync-baseline`** is still read/written for compatibility). **Plan → preview → apply:** the preview lists **non-OK** work only; **A** runs the plan, **B** cancels. **Already Up To Date** when every merged row is **OK** (not merely “nothing to upload/download” when everything is locked). First time a `game_id` has no baseline row, Auto logs **SKIP (no baseline yet)** until you run **upload-only** or **download-only** once for that game. **Switch:** **`+`** does not cancel the preview; after sync, **A** = main menu / **+** = exit in one step from the menu. **3DS:** **A** = main menu / **START** = exit app.
-- **Status line:** **`/.gbasync-status`** next to the baseline (last sync, server reachability, Dropbox last result). Main menu shows **Last sync** / **Server** / **Dropbox** on separate lines (Switch layout matches 3DS).
-- **Per-device locks:** optional **`[sync] locked_ids=`** in `config.ini`. **Save viewer** (main menu **R**) toggles locks and writes `config.ini`; locks are **not** edited from the Auto preview screen.
-- **X / upload-only** and **Y / download-only:** checklist (**ALL SAVES** or per-**`game_id`** row); rows show **`game_id` only**. Switch: **+** to run, **B** back. 3DS: **START** + **X** or **Y** to run, **B** back.
-- **Conflicts:** when local and server both diverged from baseline, a **Conflict** prompt (**X** / **Y** / **B**) on Switch and 3DS.
-- **`GET /saves`** on the server comes from **`index.json`**, not from re-scanning the save folder; **`DELETE /save/{game_id}`** cleans index + blob. See `server/README.md` and `docs/USER_GUIDE.md`.
-- ROM-header-based **`game_id`** when `[rom]` is configured: homebrew clients read only a **512-byte prefix** of each matching ROM for the header (not the full ROM per save). Otherwise normalized save stem (bridge unchanged unless noted there).
-- **Admin UI:** with **`GBASYNC_ADMIN_PASSWORD`** set, open **`/admin/ui/`** on the server for saves, conflicts, index routing, optional slot map, and guarded actions (see `admin-web/README.md`).
-- Atomic local writes; optional server version history; API-key auth for the main API.
+See **`docs/TODO.md`** for themes (e.g. HTTPS on consoles, richer admin UI, tests). **`PLAN.md`** and **`IDEA.md`** hold broader planning notes.
 
-## Delta Dropbox Sync Notes
-
-- `delta_dropbox_api_sync.py` uploads **blobs first**, then `GameSave-*` JSON sidecars, and aligns sidecar `files[0].versionIdentifier` to the uploaded blob's Dropbox `rev`.
-- This keeps Harmony metadata and attachment revisions in sync and avoids common Delta download/call errors caused by stale revision pointers.
-- In two-way mode (`GBASYNC_SERVER_DELTA_ONE_WAY=false`), Delta may still show a **one-time conflict chooser** after prior divergent history; choose the side you want once, then normal sync should stabilize.
-- Recommended two-way guardrails in `.env`:
-  - `GBASYNC_DROPBOX_INTERVAL_SECONDS=120`
-  - `GBASYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS=900`
-  - `GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS=3600`
-
-## MVP Limitations
-
-- Switch/3DS clients use plain **`http://`** (no TLS in this path yet)
-- Console sync is foreground/manual (not a background service)
-
-## Toolchain Requirements (for building clients)
-
-- Python 3.11+ (server/bridge)
-- Docker Desktop (server container workflow)
-- devkitPro with:
-  - `devkitA64` + `libnx` (Switch)
-  - `devkitARM` + `libctru` (3DS)
-- 3DS packaging tools for `./scripts/release-3ds.sh`:
-  - `makerom` (build `.cia`)
-  - `bannertool` (build icon/banner assets)
-  - `sips` on macOS (resizes banner image in current Makefile)
-
-## Contributing / next work
-
-See **`docs/TODO.md`** for backlog. Broad themes: HTTPS on consoles, optional confirms for X/Y modes, deeper tests, admin UI extensions, and optional background sync.
+---
 
 ## License
 
-This project is licensed under the `GBAsync Non-Commercial License 1.0`.
-See `LICENSE` for full terms.
+This project is licensed under the **GBAsync Non-Commercial License 1.0**. See **`LICENSE`**.
