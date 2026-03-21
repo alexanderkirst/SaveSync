@@ -38,3 +38,4 @@
 - [x] Conflict UX on consoles; HTTP client robustness (chunked / encoding / JSON tolerance)
 - [x] Switch full-sync confirm + post-sync navigation; 3DS post-sync navigation
 - [x] Server **`DELETE /save/{game_id}`** + documentation for **`index.json`** vs filesystem
+- [x] **v0.1.6:** Auto preview/status/locks, admin web UI baseline, Switch/3DS UX polish (see `docs/RELEASE_NOTES_v0.1.6.md`)

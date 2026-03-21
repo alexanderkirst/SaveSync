@@ -23,6 +23,7 @@ typedef struct {
   char vc_save_dir[256];
   char rom_dir[256];
   char rom_extension[16];
+  char locked_ids[512];
 } AppConfig;
 
 typedef struct {
@@ -60,11 +61,13 @@ typedef enum {
   SYNC_ACTION_UPLOAD_ONLY = 1,
   SYNC_ACTION_DOWNLOAD_ONLY = 2,
   SYNC_ACTION_DROPBOX_SYNC = 3,
+  SYNC_ACTION_SAVE_VIEWER = 4,
 } SyncAction;
 
 typedef struct {
   int uploads;
   int downloads;
+  int already_up_to_date;
 } SyncSummary;
 
 typedef struct {
@@ -127,6 +130,7 @@ static void config_init(AppConfig* cfg) {
   copy_cstr(cfg->vc_save_dir, sizeof(cfg->vc_save_dir), "sdmc:/3ds/Checkpoint/saves");
   copy_cstr(cfg->rom_dir, sizeof(cfg->rom_dir), "sdmc:/roms/gba");
   copy_cstr(cfg->rom_extension, sizeof(cfg->rom_extension), ".gba");
+  cfg->locked_ids[0] = '\0';
 }
 
 static void trim_line(char* s) {
@@ -186,6 +190,8 @@ static void load_config(AppConfig* cfg, const char* path) {
       }
     } else if (strcmp(section, "rom") == 0 && strcmp(key, "rom_extension") == 0) {
       copy_cstr(cfg->rom_extension, sizeof(cfg->rom_extension), value);
+    } else if (strcmp(section, "sync") == 0 && strcmp(key, "locked_ids") == 0) {
+      copy_cstr(cfg->locked_ids, sizeof(cfg->locked_ids), value);
     }
   }
 
@@ -286,6 +292,16 @@ static bool game_id_from_rom_header_bytes(const unsigned char* data, size_t len,
   return out[0] != '\0';
 }
 
+/* Header fields used for game_id are within the first ~0xB0 bytes; avoid reading multi‑MiB ROMs per .sav. */
+static bool read_rom_header_prefix(const char* path, unsigned char* out, size_t out_sz) {
+  if (out_sz < 0xB0) return false;
+  FILE* fp = fopen(path, "rb");
+  if (!fp) return false;
+  size_t n = fread(out, 1, out_sz, fp);
+  fclose(fp);
+  return n >= 0xB0;
+}
+
 static void resolve_game_id_for_save(const AppConfig* cfg, const char* save_stem, char* out, size_t out_size) {
   if (cfg->rom_dir[0] != '\0') {
     char ext[16];
@@ -298,14 +314,9 @@ static void resolve_game_id_for_save(const AppConfig* cfg, const char* save_stem
     }
     char rom_path[640];
     snprintf(rom_path, sizeof(rom_path), "%s/%s%s", cfg->rom_dir, save_stem, ext);
-    unsigned char* rom_bytes = NULL;
-    size_t rom_len = 0;
-    if (read_file_bytes(rom_path, &rom_bytes, &rom_len)) {
-      if (game_id_from_rom_header_bytes(rom_bytes, rom_len, out, out_size)) {
-        free(rom_bytes);
-        return;
-      }
-      free(rom_bytes);
+    unsigned char rom_hdr[512];
+    if (read_rom_header_prefix(rom_path, rom_hdr, sizeof(rom_hdr))) {
+      if (game_id_from_rom_header_bytes(rom_hdr, sizeof(rom_hdr), out, out_size)) return;
     }
   }
   sanitize_game_id(save_stem, out, out_size);
@@ -1401,7 +1412,7 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
     hidScanInput();
     u32 kDown = hidKeysDown();
     /* Avoid X while still in main "upload" flow if undesired; START is primary. */
-    const u32 confirm_upload = KEY_START | KEY_R | KEY_X;
+    const u32 confirm_upload = KEY_START | KEY_X;
 
     if (kDown & confirm_upload) {
       if (master_all) {
@@ -1466,7 +1477,7 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
 
       consoleClear();
       printf("Upload: choose saves\n");
-      printf("DPad: move  A: toggle  START/R/X: run  B: back to menu\n\n");
+      printf("DPad: move  A: toggle  START/X: run  B: back to menu\n\n");
       for (int row = scroll; row < scroll + kVisible && row < total_rows; row++) {
         char mark = (row == cursor) ? '>' : ' ';
         if (row == 0) {
@@ -1474,11 +1485,10 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
         } else {
           const LocalSave* L = &local[row - 1];
           printf(
-              "%c [%c] %.28s (%.36s)\n",
+              "%c [%c] %.28s\n",
               mark,
               picked[row - 1] ? 'x' : ' ',
-              L->game_id,
-              L->name);
+              L->game_id);
         }
       }
       dirty = false;
@@ -1525,7 +1535,7 @@ static bool pick_download_selection_3ds(const AppConfig* cfg, SyncManualFilter* 
   while (aptMainLoop()) {
     hidScanInput();
     u32 kDown = hidKeysDown();
-    const u32 confirm_download = KEY_START | KEY_R | KEY_Y;
+    const u32 confirm_download = KEY_START | KEY_Y;
 
     if (kDown & confirm_download) {
       if (master_all) {
@@ -1590,20 +1600,18 @@ static bool pick_download_selection_3ds(const AppConfig* cfg, SyncManualFilter* 
 
       consoleClear();
       printf("Download: choose saves\n");
-      printf("DPad: move  A: toggle  START/R/Y: run  B: back to menu\n\n");
+      printf("DPad: move  A: toggle  START/Y: run  B: back to menu\n\n");
       for (int row = scroll; row < scroll + kVisible && row < total_rows; row++) {
         char mark = (row == cursor) ? '>' : ' ';
         if (row == 0) {
           printf("%c [%c] ALL SAVES\n", mark, master_all ? 'x' : ' ');
         } else {
           const RemoteSave* R = &remote[row - 1];
-          const char* hint = R->filename_hint[0] != '\0' ? R->filename_hint : "-";
           printf(
-              "%c [%c] %.28s (%.36s)\n",
+              "%c [%c] %.28s\n",
               mark,
               picked[row - 1] ? 'x' : ' ',
-              R->game_id,
-              hint);
+              R->game_id);
         }
       }
       dirty = false;
@@ -1616,8 +1624,560 @@ static bool pick_download_selection_3ds(const AppConfig* cfg, SyncManualFilter* 
   return false;
 }
 
-static SyncSummary run_sync(const AppConfig* cfg, SyncAction action, const SyncManualFilter* xy_filter) {
+static void str_tolower_buf(char* s) {
+  if (!s) return;
+  for (; *s; s++) *s = (char)tolower((unsigned char)*s);
+}
+
+static void trim_end_spaces(char* s) {
+  size_t n = strlen(s);
+  while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t')) {
+    s[n - 1] = '\0';
+    n--;
+  }
+}
+
+static int is_game_locked(const AppConfig* cfg, const char* game_id) {
+  if (!cfg->locked_ids[0]) return 0;
+  char want[128];
+  copy_cstr(want, sizeof(want), game_id);
+  str_tolower_buf(want);
+  char buf[512];
+  copy_cstr(buf, sizeof(buf), cfg->locked_ids);
+  char* saveptr = NULL;
+  char* tok = strtok_r(buf, ",", &saveptr);
+  while (tok) {
+    while (*tok == ' ' || *tok == '\t') tok++;
+    trim_end_spaces(tok);
+    char entry[128];
+    copy_cstr(entry, sizeof(entry), tok);
+    str_tolower_buf(entry);
+    if (entry[0] && strcmp(entry, want) == 0) return 1;
+    tok = strtok_r(NULL, ",", &saveptr);
+  }
+  return 0;
+}
+
+static void toggle_locked_id(AppConfig* cfg, const char* game_id) {
+  char want[128];
+  copy_cstr(want, sizeof(want), game_id);
+  str_tolower_buf(want);
+  if (is_game_locked(cfg, game_id)) {
+    char newbuf[512];
+    newbuf[0] = '\0';
+    char buf[512];
+    copy_cstr(buf, sizeof(buf), cfg->locked_ids);
+    char* saveptr = NULL;
+    char* tok = strtok_r(buf, ",", &saveptr);
+    int first = 1;
+    while (tok) {
+      while (*tok == ' ' || *tok == '\t') tok++;
+      trim_end_spaces(tok);
+      char entry[128];
+      copy_cstr(entry, sizeof(entry), tok);
+      char el[128];
+      copy_cstr(el, sizeof(el), entry);
+      str_tolower_buf(el);
+      if (strcmp(el, want) != 0) {
+        if (!first) strncat(newbuf, ",", sizeof(newbuf) - strlen(newbuf) - 1);
+        strncat(newbuf, entry, sizeof(newbuf) - strlen(newbuf) - 1);
+        first = 0;
+      }
+      tok = strtok_r(NULL, ",", &saveptr);
+    }
+    copy_cstr(cfg->locked_ids, sizeof(cfg->locked_ids), newbuf);
+  } else {
+    size_t len = strlen(cfg->locked_ids);
+    if (len > 0 && len + 1 < sizeof(cfg->locked_ids)) {
+      strncat(cfg->locked_ids, ",", sizeof(cfg->locked_ids) - len - 1);
+    }
+    strncat(cfg->locked_ids, want, sizeof(cfg->locked_ids) - strlen(cfg->locked_ids) - 1);
+  }
+}
+
+static int save_locked_ids_to_ini_3ds(const char* path, const char* locked_ids_str) {
+#define GB_INI_MAX_LINES 160
+  /* Heap: ~80KB on stack overflows the 3DS default thread stack when toggling locks. */
+  char (*lines)[512] = (char (*)[512])calloc((size_t)GB_INI_MAX_LINES, sizeof(*lines));
+  if (!lines) return 0;
+  int n = 0;
+  FILE* in = fopen(path, "r");
+  if (in) {
+    while (n < GB_INI_MAX_LINES && fgets(lines[n], (int)sizeof(lines[0]), in)) n++;
+    fclose(in);
+  }
+  int in_sync = 0;
+  int replaced = 0;
+  for (int i = 0; i < n; i++) {
+    char t[512];
+    copy_cstr(t, sizeof(t), lines[i]);
+    trim_line(t);
+    if (t[0] == '[' && strchr(t, ']')) {
+      in_sync = (strcmp(t, "[sync]") == 0);
+      continue;
+    }
+    if (in_sync && strncmp(t, "locked_ids=", 11) == 0) {
+      snprintf(lines[i], sizeof(lines[i]), "locked_ids=%s\n", locked_ids_str);
+      replaced = 1;
+      break;
+    }
+  }
+  if (!replaced) {
+    for (int i = 0; i < n; i++) {
+      char t[512];
+      copy_cstr(t, sizeof(t), lines[i]);
+      trim_line(t);
+      if (strcmp(t, "[sync]") == 0) {
+        if (n + 1 < GB_INI_MAX_LINES) {
+          memmove(lines + i + 2, lines + i + 1, (size_t)(n - i - 1) * sizeof(lines[0]));
+          snprintf(lines[i + 1], sizeof(lines[i + 1]), "locked_ids=%s\n", locked_ids_str);
+          n++;
+        }
+        replaced = 1;
+        break;
+      }
+    }
+  }
+  if (!replaced && n + 2 < GB_INI_MAX_LINES) {
+    if (n > 0 && lines[n - 1][0] != '\0') snprintf(lines[n++], sizeof(lines[0]), "\n");
+    snprintf(lines[n++], sizeof(lines[0]), "[sync]\n");
+    snprintf(lines[n++], sizeof(lines[0]), "locked_ids=%s\n", locked_ids_str);
+  }
+  char tmp[600];
+  if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp)) {
+    free(lines);
+    return 0;
+  }
+  FILE* out = fopen(tmp, "w");
+  if (!out) {
+    free(lines);
+    return 0;
+  }
+  for (int i = 0; i < n; i++) fputs(lines[i], out);
+  fclose(out);
+  remove(path);
+  if (rename(tmp, path) != 0) {
+    remove(tmp);
+    free(lines);
+    return 0;
+  }
+  free(lines);
+  return 1;
+}
+
+static int cmp_merge_id_str(const void* a, const void* b) {
+  return strcmp((const char*)a, (const char*)b);
+}
+
+static void save_viewer_3ds(AppConfig* cfg) {
+  const char* save_dir = active_save_dir(cfg);
+  LocalSave* local = (LocalSave*)calloc(MAX_SAVES, sizeof(LocalSave));
+  RemoteSave* remote = (RemoteSave*)calloc(MAX_SAVES, sizeof(RemoteSave));
+  if (!local || !remote) {
+    free(local);
+    free(remote);
+    return;
+  }
+  ensure_directory_exists(save_dir);
+  int lc = scan_local_saves(cfg, save_dir, local, MAX_SAVES);
+  int status = 0;
+  unsigned char* body = NULL;
+  size_t body_len = 0;
+  if (!http_request(cfg, "GET", "/saves", NULL, NULL, 0, &status, &body, &body_len) || status != 200) {
+    consoleClear();
+    printf("Save viewer: GET /saves failed");
+    if (status > 0) printf(" (HTTP %d)", status);
+    printf("\nB: back\n");
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+    while (aptMainLoop()) {
+      hidScanInput();
+      if (hidKeysDown() & KEY_B) break;
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+    }
+    free(body);
+    free(local);
+    free(remote);
+    return;
+  }
+  int rc = parse_remote_saves((const char*)body, remote, MAX_SAVES);
+  free(body);
+  const int cap = MAX_SAVES * 2;
+  char (*merge_ids)[128] = (char (*)[128])calloc((size_t)cap, sizeof(*merge_ids));
+  if (!merge_ids) {
+    free(local);
+    free(remote);
+    return;
+  }
+  int n_merge = 0;
+  int i;
+  for (i = 0; i < lc; i++) n_merge = add_merge_id(merge_ids, n_merge, cap, local[i].game_id);
+  for (i = 0; i < rc; i++) n_merge = add_merge_id(merge_ids, n_merge, cap, remote[i].game_id);
+  if (n_merge > 1) qsort(merge_ids, (size_t)n_merge, sizeof(merge_ids[0]), cmp_merge_id_str);
+  if (n_merge <= 0) {
+    consoleClear();
+    printf("Save viewer: no saves (local or server).\n");
+    printf("B: back\n");
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+    while (aptMainLoop()) {
+      hidScanInput();
+      if (hidKeysDown() & KEY_B) break;
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+    }
+    free(merge_ids);
+    free(local);
+    free(remote);
+    return;
+  }
+  int cursor = 0;
+  int scroll = 0;
+  const int kVisible = 14;
+  const int total_rows = n_merge;
+  const char* config_path = "sdmc:/3ds/gba-sync/config.ini";
+  bool dirty = true;
+  while (aptMainLoop()) {
+    hidScanInput();
+    u32 kDown = hidKeysDown();
+    if (kDown & KEY_B) break;
+    if (kDown & KEY_R) {
+      toggle_locked_id(cfg, merge_ids[cursor]);
+      (void)save_locked_ids_to_ini_3ds(config_path, cfg->locked_ids);
+      dirty = true;
+    }
+    if (kDown & KEY_DUP) {
+      cursor = (cursor + total_rows - 1) % total_rows;
+      dirty = true;
+    }
+    if (kDown & KEY_DDOWN) {
+      cursor = (cursor + 1) % total_rows;
+      dirty = true;
+    }
+    if (cursor < scroll) scroll = cursor;
+    if (cursor >= scroll + kVisible) scroll = cursor - kVisible + 1;
+    if (scroll < 0) scroll = 0;
+    {
+      int max_scroll = total_rows > kVisible ? total_rows - kVisible : 0;
+      if (scroll > max_scroll) scroll = max_scroll;
+    }
+
+    if (!dirty) {
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+      continue;
+    }
+
+    consoleClear();
+    printf("--- Save viewer (lock for Auto) ---\n");
+    printf("\n");
+    {
+      const int kMenuLeftCol = 22;
+      printf("%-*s%s\n", kMenuLeftCol, "UP/DOWN: move", "");
+      printf("%-*s%s\n", kMenuLeftCol, "R: toggle lock -> config", "");
+      printf("%-*s%s\n", kMenuLeftCol, "b: back", "");
+    }
+    printf("\n");
+    for (int row = scroll; row < scroll + kVisible && row < total_rows; row++) {
+      char mark = (row == cursor) ? '>' : ' ';
+      char lk[8];
+      copy_cstr(lk, sizeof(lk), is_game_locked(cfg, merge_ids[row]) ? "[L]" : "   ");
+      printf("%c%s %.28s\n", mark, lk, merge_ids[row]);
+    }
+    dirty = false;
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+  }
+  free(merge_ids);
+  free(local);
+  free(remote);
+}
+
+typedef enum {
+  AP_OK = 0,
+  AP_UP,
+  AP_DN,
+  AP_SKIP,
+  AP_CONF,
+  AP_LOCK
+} AutoPlanKind;
+
+typedef struct {
+  char id[128];
+  AutoPlanKind kind;
+} AutoPlanRow;
+
+static AutoPlanKind classify_auto_3ds(
+    const char* id,
+    LocalSave* l,
+    RemoteSave* r,
+    BaselineRow* baseline,
+    int n_baseline,
+    int locked) {
+  if (l && r) {
+    if (strcmp(l->sha256, r->sha256) == 0) return AP_OK;
+    if (locked) return AP_LOCK;
+    const char* base = baseline_find(baseline, n_baseline, id);
+    if (!base || base[0] == '\0') return AP_SKIP;
+    const int loc_eq = (strcmp(l->sha256, base) == 0);
+    const int rem_eq = (strcmp(r->sha256, base) == 0);
+    if (loc_eq && !rem_eq) return AP_DN;
+    if (!loc_eq && rem_eq) return AP_UP;
+    if (!loc_eq && !rem_eq) return AP_CONF;
+  } else if (l && !r) {
+    return locked ? AP_LOCK : AP_UP;
+  } else if (!l && r) {
+    return locked ? AP_LOCK : AP_DN;
+  }
+  return AP_OK;
+}
+
+static const char* plan_kind_label(AutoPlanKind k) {
+  switch (k) {
+    case AP_OK:
+      return "OK";
+    case AP_UP:
+      return "UPLOAD";
+    case AP_DN:
+      return "DOWNLOAD";
+    case AP_SKIP:
+      return "SKIP (no baseline)";
+    case AP_CONF:
+      return "CONFLICT (prompt)";
+    case AP_LOCK:
+      return "SKIP (locked)";
+    default:
+      return "?";
+  }
+}
+
+static void fill_auto_plan_merge(
+    const AppConfig* cfg,
+    char (*merge_ids)[128],
+    int n_merge,
+    LocalSave* local,
+    int lc,
+    RemoteSave* remote,
+    int rc,
+    BaselineRow* baseline,
+    int n_baseline,
+    AutoPlanRow* plan) {
+  for (int m = 0; m < n_merge; m++) {
+    const char* id = merge_ids[m];
+    copy_cstr(plan[m].id, sizeof(plan[m].id), id);
+    LocalSave* l = find_local_by_id(local, lc, id);
+    RemoteSave* r = find_remote_by_id(remote, rc, id);
+    plan[m].kind = classify_auto_3ds(id, l, r, baseline, n_baseline, is_game_locked(cfg, id));
+  }
+}
+
+static void gbasync_status_path(char* out, size_t out_sz, const char* save_dir) {
+  join_path(out, out_sz, save_dir, ".gbasync-status");
+}
+
+static void sync_status_save(
+    const char* save_dir, time_t t, int last_ok, int server_ok, int dropbox, const char* err) {
+  char path[512], tmp[520];
+  gbasync_status_path(path, sizeof(path), save_dir);
+  if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp)) return;
+  FILE* fp = fopen(tmp, "w");
+  if (!fp) return;
+  fprintf(fp, "v=1\n");
+  fprintf(fp, "t=%lld\n", (long long)t);
+  fprintf(fp, "ok=%d\n", last_ok ? 1 : 0);
+  fprintf(fp, "srv=%d\n", server_ok ? 1 : 0);
+  if (dropbox < 0)
+    fprintf(fp, "db=u\n");
+  else
+    fprintf(fp, "db=%d\n", dropbox ? 1 : 0);
+  fprintf(fp, "e=%s\n", err ? err : "");
+  fclose(fp);
+  remove(path);
+  if (rename(tmp, path) != 0) remove(tmp);
+}
+
+static void sync_status_after_server(const AppConfig* cfg, int last_ok, int server_ok, const char* err) {
+  const char* sd = active_save_dir(cfg);
+  time_t now = time(NULL);
+  int db = -1;
+  char path[512];
+  gbasync_status_path(path, sizeof(path), sd);
+  FILE* fp = fopen(path, "r");
+  if (fp) {
+    char line[320];
+    while (fgets(line, sizeof(line), fp)) {
+      if (strncmp(line, "db=u", 4) == 0) db = -1;
+      else if (strncmp(line, "db=0", 4) == 0) db = 0;
+      else if (strncmp(line, "db=1", 4) == 0) db = 1;
+    }
+    fclose(fp);
+  }
+  sync_status_save(sd, now, last_ok, server_ok, db, err ? err : "");
+}
+
+static void sync_status_after_dropbox(const AppConfig* cfg, int http_ok) {
+  const char* sd = active_save_dir(cfg);
+  sync_status_save(sd, time(NULL), http_ok, http_ok, http_ok ? 1 : 0, "");
+}
+
+static void sync_status_print_menu(const AppConfig* cfg) {
+  const char* sd = active_save_dir(cfg);
+  char path[512];
+  gbasync_status_path(path, sizeof(path), sd);
+  FILE* fp = fopen(path, "r");
+  if (!fp) {
+    printf("Last sync: (none)\n");
+    printf("Server: —\n");
+    printf("Dropbox: —\n\n");
+    return;
+  }
+  time_t t = 0;
+  int ok = 0, srv = 0, db = -1;
+  char err[80];
+  err[0] = '\0';
+  char line[320];
+  while (fgets(line, sizeof(line), fp)) {
+    if (strncmp(line, "t=", 2) == 0) t = (time_t)strtoll(line + 2, NULL, 10);
+    if (strncmp(line, "ok=", 3) == 0) ok = atoi(line + 3);
+    if (strncmp(line, "srv=", 4) == 0) srv = atoi(line + 4);
+    if (strncmp(line, "db=u", 4) == 0) db = -1;
+    if (strncmp(line, "db=0", 4) == 0) db = 0;
+    if (strncmp(line, "db=1", 4) == 0) db = 1;
+    if (strncmp(line, "e=", 2) == 0) {
+      copy_cstr(err, sizeof(err), line + 2);
+      size_t n = strlen(err);
+      while (n > 0 && (err[n - 1] == '\n' || err[n - 1] == '\r')) err[--n] = '\0';
+    }
+  }
+  fclose(fp);
+  char tbuf[40] = "unknown";
+  if (t > 0) {
+    struct tm tm_utc;
+    gmtime_r(&t, &tm_utc);
+    strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M UTC", &tm_utc);
+  }
+  const char* srvs = srv ? "OK" : "fail";
+  const char* dbs = (db < 0) ? "—" : (db ? "OK" : "fail");
+  const char* oks = ok ? "OK" : "fail";
+  printf("Last sync: %s %s\n", oks, tbuf);
+  printf("Server: %s\n", srvs);
+  printf("Dropbox: %s\n", dbs);
+  if (err[0]) printf("Last error: %.60s\n", err);
+  printf("\n");
+}
+
+static int preview_auto_plan_3ds(
+    AppConfig* cfg,
+    char (*merge_ids)[128],
+    int n_merge,
+    LocalSave* local,
+    int lc,
+    RemoteSave* remote,
+    int rc,
+    BaselineRow* baseline,
+    int n_baseline,
+    AutoPlanRow* plan) {
+  int nu = 0, nd = 0, ns = 0, nc = 0, nl = 0, nk = 0;
+  fill_auto_plan_merge(cfg, merge_ids, n_merge, local, lc, remote, rc, baseline, n_baseline, plan);
+  for (int i = 0; i < n_merge; i++) {
+    switch (plan[i].kind) {
+      case AP_UP:
+        nu++;
+        break;
+      case AP_DN:
+        nd++;
+        break;
+      case AP_SKIP:
+        ns++;
+        break;
+      case AP_CONF:
+        nc++;
+        break;
+      case AP_LOCK:
+        nl++;
+        break;
+      case AP_OK:
+        nk++;
+        break;
+      default:
+        break;
+    }
+  }
+  /* Rows to show: everything except OK (upload/download/skip/conflict/lock only). */
+  int filt[MAX_SAVES];
+  int n_filt = 0;
+  for (int i = 0; i < n_merge; i++) {
+    if (plan[i].kind != AP_OK) filt[n_filt++] = i;
+  }
+  int cursor = 0;
+  int scroll = 0;
+  const int kVisible = 12;
+  int total_rows = n_filt > 0 ? n_filt : 1;
+  bool dirty = true;
+
+  while (aptMainLoop()) {
+    hidScanInput();
+    u32 kDown = hidKeysDown();
+    if (kDown & KEY_A) return 1;
+    if (kDown & KEY_B || kDown & KEY_START) return 0;
+    if (n_filt > 0) {
+      if (kDown & KEY_DUP) {
+        cursor = (cursor + total_rows - 1) % total_rows;
+        dirty = true;
+      }
+      if (kDown & KEY_DDOWN) {
+        cursor = (cursor + 1) % total_rows;
+        dirty = true;
+      }
+      if (cursor < scroll) scroll = cursor;
+      if (cursor >= scroll + kVisible) scroll = cursor - kVisible + 1;
+      if (scroll < 0) scroll = 0;
+      {
+        int max_scroll = total_rows > kVisible ? total_rows - kVisible : 0;
+        if (scroll > max_scroll) scroll = max_scroll;
+      }
+    }
+
+    if (!dirty) {
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+      continue;
+    }
+
+    consoleClear();
+    printf("--- Sync preview ---\n");
+    printf("UP:%d DN:%d SKIP:%d CONF:%d LOCK:%d\n", nu, nd, ns, nc, nl);
+    printf("\n");
+    {
+      const int kPrevCol = 20;
+      printf("%-*s%s\n", kPrevCol, "a: confirm", "");
+      printf("%-*s%s\n", kPrevCol, "b: back", "");
+    }
+    printf("\n");
+    for (int row = scroll; row < scroll + kVisible && row < n_filt; row++) {
+      int pi = filt[row];
+      char mark = (row == cursor) ? '>' : ' ';
+      printf("%c %.28s  %s\n", mark, plan[pi].id, plan_kind_label(plan[pi].kind));
+    }
+    dirty = false;
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+  }
+  return 0;
+}
+
+static SyncSummary run_sync(AppConfig* cfg, SyncAction action, const SyncManualFilter* xy_filter) {
   SyncSummary summary = {0};
+  printf("\n");
   printf("Scanning local saves...\n");
   LocalSave* local = (LocalSave*)calloc(MAX_SAVES, sizeof(LocalSave));
   RemoteSave* remote = (RemoteSave*)calloc(MAX_SAVES, sizeof(RemoteSave));
@@ -1646,6 +2206,7 @@ static SyncSummary run_sync(const AppConfig* cfg, SyncAction action, const SyncM
   size_t body_len = 0;
   if (!http_request(cfg, "GET", "/saves", NULL, NULL, 0, &status, &body, &body_len) || status != 200) {
     printf("ERROR: failed GET /saves (check server URL/API key/network)\n");
+    sync_status_after_server(cfg, 0, 0, "GET /saves");
     free(body);
     free(baseline);
     free(local);
@@ -1667,6 +2228,7 @@ static SyncSummary run_sync(const AppConfig* cfg, SyncAction action, const SyncM
     if (!baseline_save(save_dir, baseline, n_baseline)) {
       printf("WARN: could not write .gbasync-baseline\n");
     }
+    sync_status_after_server(cfg, 1, 1, "");
     free(baseline);
     free(local);
     free(remote);
@@ -1684,6 +2246,7 @@ static SyncSummary run_sync(const AppConfig* cfg, SyncAction action, const SyncM
     if (!baseline_save(save_dir, baseline, n_baseline)) {
       printf("WARN: could not write .gbasync-baseline\n");
     }
+    sync_status_after_server(cfg, 1, 1, "");
     free(baseline);
     free(local);
     free(remote);
@@ -1710,13 +2273,107 @@ static SyncSummary run_sync(const AppConfig* cfg, SyncAction action, const SyncM
 
   debug_report_sync_start_3ds(cfg, local_count, n_baseline);
 
+  AutoPlanRow* plan = (AutoPlanRow*)calloc((size_t)n_merge, sizeof(AutoPlanRow));
+  if (!plan) {
+    printf("ERROR: out of memory (plan)\n");
+    free(merge_ids);
+    free(baseline);
+    free(local);
+    free(remote);
+    return summary;
+  }
+  fill_auto_plan_merge(cfg, merge_ids, n_merge, local, local_count, remote, remote_count, baseline, n_baseline, plan);
+
+  {
+    int nu = 0, nd = 0, ns = 0, nc = 0, nl = 0, nk = 0;
+    for (int i = 0; i < n_merge; i++) {
+      switch (plan[i].kind) {
+        case AP_UP:
+          nu++;
+          break;
+        case AP_DN:
+          nd++;
+          break;
+        case AP_SKIP:
+          ns++;
+          break;
+        case AP_CONF:
+          nc++;
+          break;
+        case AP_LOCK:
+          nl++;
+          break;
+        case AP_OK:
+          nk++;
+          break;
+        default:
+          break;
+      }
+    }
+    /* All rows OK (hashes match): truly up to date. Do not use nu+nd+ns+nc==0 — that
+     * misfires when every row is locked (no upload/download planned but not "synced"). */
+    if (nk == n_merge) {
+      int m;
+      printf("\n");
+      printf("Already Up To Date\n");
+      for (m = 0; m < n_merge; m++) {
+        const char* id = merge_ids[m];
+        if (is_game_locked(cfg, id)) continue;
+        {
+          LocalSave* l = find_local_by_id(local, local_count, id);
+          RemoteSave* r = find_remote_by_id(remote, remote_count, id);
+          if (l && r && strcmp(l->sha256, r->sha256) == 0) {
+            baseline_upsert(baseline, &n_baseline, MAX_SAVES, id, l->sha256);
+          }
+        }
+      }
+      if (!baseline_save(save_dir, baseline, n_baseline)) {
+        printf("WARN: could not write .gbasync-baseline\n");
+      }
+      sync_status_after_server(cfg, 1, 1, "");
+      summary.already_up_to_date = 1;
+      free(plan);
+      free(merge_ids);
+      free(baseline);
+      free(local);
+      free(remote);
+      return summary;
+    }
+  }
+
+  if (!preview_auto_plan_3ds(
+          cfg,
+          merge_ids,
+          n_merge,
+          local,
+          local_count,
+          remote,
+          remote_count,
+          baseline,
+          n_baseline,
+          plan)) {
+    printf("Preview cancelled.\n");
+    free(plan);
+    free(merge_ids);
+    free(baseline);
+    free(local);
+    free(remote);
+    return summary;
+  }
+  free(plan);
+
+  printf("\n");
+
   for (int m = 0; m < n_merge; m++) {
     const char* id = merge_ids[m];
+    if (is_game_locked(cfg, id)) {
+      printf("%s: SKIP (locked on this device)\n", id);
+      continue;
+    }
     LocalSave* l = find_local_by_id(local, local_count, id);
     RemoteSave* r = find_remote_by_id(remote, remote_count, id);
     if (l && r) {
       if (strcmp(l->sha256, r->sha256) == 0) {
-        printf("%s: OK\n", id);
         baseline_upsert(baseline, &n_baseline, MAX_SAVES, id, l->sha256);
         continue;
       }
@@ -1759,6 +2416,7 @@ static SyncSummary run_sync(const AppConfig* cfg, SyncAction action, const SyncM
   if (!baseline_save(save_dir, baseline, n_baseline)) {
     printf("WARN: could not write .gbasync-baseline\n");
   }
+  sync_status_after_server(cfg, 1, 1, "");
 
   free(merge_ids);
   free(baseline);
@@ -1767,7 +2425,7 @@ static SyncSummary run_sync(const AppConfig* cfg, SyncAction action, const SyncM
   return summary;
 }
 
-static bool choose_action(SyncAction* out_action) {
+static bool choose_action(SyncAction* out_action, bool* exit_app) {
   while (aptMainLoop()) {
     hidScanInput();
     u32 kDown = hidKeysDown();
@@ -1787,7 +2445,12 @@ static bool choose_action(SyncAction* out_action) {
       *out_action = SYNC_ACTION_DROPBOX_SYNC;
       return true;
     }
+    if (kDown & KEY_R) {
+      *out_action = SYNC_ACTION_SAVE_VIEWER;
+      return true;
+    }
     if (kDown & KEY_START) {
+      if (exit_app) *exit_app = true;
       return false;
     }
     gfxFlushBuffers();
@@ -1805,46 +2468,23 @@ static void run_dropbox_sync_once_3ds(const AppConfig* cfg, bool* quit_app) {
   bool ok = http_request(cfg, "POST", "/dropbox/sync-once", "application/json", NULL, 0, &st, &resp, &resp_len);
   if (!ok) {
     printf("Dropbox sync request: ERROR(request)\n");
+    sync_status_after_dropbox(cfg, 0);
   } else if (st == 200) {
     printf("Dropbox sync request: OK\n");
+    sync_status_after_dropbox(cfg, 1);
   } else {
     printf("Dropbox sync request: HTTP %d\n", st);
+    sync_status_after_dropbox(cfg, 0);
   }
   free(resp);
   wait_after_sync_3ds(quit_app, false);
 }
 
-static bool confirm_auto_sync(void) {
-  printf("\n");
-  printf("      -------- Confirm --------\n");
-  printf("\n");
-  printf("  Full sync uses hash baselines on 3DS\n");
-  printf("  (not unreliable file dates).\n");
-  printf("\n");
-  printf("  If a game conflicts: X or Y picks a side\n");
-  printf("  (press once; use again if both changed).\n");
-  printf("\n");
-  printf("  A           Continue\n");
-  printf("  B / START   Back to main menu\n");
-  printf("\n");
-
-  while (aptMainLoop()) {
-    hidScanInput();
-    u32 kDown = hidKeysDown();
-    if (kDown & KEY_A) return true;
-    if (kDown & KEY_B || kDown & KEY_START) return false;
-    gfxFlushBuffers();
-    gfxSwapBuffers();
-    gspWaitForVBlank();
-  }
-  return false;
-}
-
 static void wait_after_sync_3ds(bool* quit_app, bool can_reboot) {
   if (can_reboot) {
-    printf("\na: main menu   y: reboot now   START: exit app\n");
+    printf("\na: main menu   y: reboot now   START: exit\n");
   } else {
-    printf("\na: main menu   START: exit app\n");
+    printf("\na: main menu   START: exit\n");
   }
   while (aptMainLoop()) {
     hidScanInput();
@@ -1904,42 +2544,43 @@ int main(int argc, char** argv) {
       printf("Server: %s\n", cfg.server_url);
       printf("Mode: %s\n", is_vc_mode(&cfg) ? "vc" : "normal");
       printf("Save dir: %s\n\n", active_save_dir(&cfg));
-      printf("a: Full sync\n");
-      printf("x: Upload only\n");
-      printf("y: Download only\n\n");
-      printf("SELECT: Dropbox sync now\n\n");
-      printf("START on this menu exits the app.\n");
+      sync_status_print_menu(&cfg);
+      /* Two columns: sync actions (left) | R / SELECT / START hints (right) */
+      {
+        const int kMenuLeftCol = 20;
+        printf("%-*s%s\n", kMenuLeftCol, "a: Auto sync", "R: save viewer");
+        printf("%-*s%s\n", kMenuLeftCol, "x: Upload only", "SELECT: dropbox sync");
+        printf("%-*s%s\n", kMenuLeftCol, "y: Download only", "START: exit");
+      }
 
       SyncAction action = SYNC_ACTION_AUTO;
-      if (!choose_action(&action)) break;
+      if (!choose_action(&action, &quit_app)) break;
 
       SyncManualFilter xy;
       memset(&xy, 0, sizeof(xy));
       xy.all = 1;
-      if (action == SYNC_ACTION_AUTO && !confirm_auto_sync()) {
-        manual_filter_free(&xy);
-        continue;
-      }
 
       if (action == SYNC_ACTION_DROPBOX_SYNC) {
         run_dropbox_sync_once_3ds(&cfg, &quit_app);
+      } else if (action == SYNC_ACTION_SAVE_VIEWER) {
+        save_viewer_3ds(&cfg);
       } else if (action == SYNC_ACTION_UPLOAD_ONLY) {
         if (!pick_upload_selection_3ds(&cfg, &xy)) {
           manual_filter_free(&xy);
           continue;
         }
         SyncSummary summary = run_sync(&cfg, action, &xy);
-        wait_after_sync_3ds(&quit_app, summary.downloads > 0);
+        wait_after_sync_3ds(&quit_app, summary.downloads > 0 || summary.already_up_to_date);
       } else if (action == SYNC_ACTION_DOWNLOAD_ONLY) {
         if (!pick_download_selection_3ds(&cfg, &xy)) {
           manual_filter_free(&xy);
           continue;
         }
         SyncSummary summary = run_sync(&cfg, action, &xy);
-        wait_after_sync_3ds(&quit_app, summary.downloads > 0);
+        wait_after_sync_3ds(&quit_app, summary.downloads > 0 || summary.already_up_to_date);
       } else {
         SyncSummary summary = run_sync(&cfg, action, NULL);
-        wait_after_sync_3ds(&quit_app, summary.downloads > 0);
+        wait_after_sync_3ds(&quit_app, summary.downloads > 0 || summary.already_up_to_date);
       }
       manual_filter_free(&xy);
     }

@@ -147,7 +147,7 @@ GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS=3600
 
 Use artifact:
 
-- `dist/switch/gbasync-switch-v0.1.3/gbasync.nro`
+- `dist/switch/gbasync-switch-v0.1.6/gbasync.nro`
 
 On SD card:
 
@@ -163,6 +163,8 @@ api_key=change-me
 
 [sync]
 save_dir=sdmc:/mGBA
+# Optional: comma-separated game_id list skipped on Auto (no upload/download)
+# locked_ids=my-hack-title,other-game
 
 [rom]
 rom_dir=sdmc:/roms/gba
@@ -171,9 +173,9 @@ rom_extension=.gba
 
 Launch from Homebrew Menu.
 
-**Main menu:** **A** full sync, **X** upload-only, **Y** download-only, **+** exits the app.
+**Main menu:** **A** Auto sync, **X** upload-only, **Y** download-only, **+** exits the app. A short **status line** shows last sync / server / Dropbox (from **`.gbasync-status`** next to your saves).
 
-**Full sync** opens a **confirm** screen: **A** runs Auto sync, **B** returns to the menu (**+** does not cancel here — avoids accidental backs).
+**Auto sync** runs a **preview** of planned actions per game (upload/download/skip/conflict/locked — **non-OK rows only**), then **A** applies or **B** returns to the menu (**+** does not cancel on the preview — avoids accidental backs). Preview is **confirm-only** (no lock editing there). Change **locks** from the main menu **Save viewer** (**R**): highlight a row and **R** toggles lock; **`locked_ids=`** is written to `sdmc:/switch/gba-sync/config.ini`.
 
 After logs finish, a **done** screen appears: **A** returns to the main menu; **+** exits the app.
 
@@ -190,7 +192,7 @@ metroid-zero: DOWNLOADED
 
 Use artifact:
 
-- `dist/3ds/gbasync-3ds-v0.1.3/gbasync.3dsx`
+- `dist/3ds/gbasync-3ds-v0.1.6/gbasync.3dsx`
 
 On SD card:
 
@@ -208,6 +210,7 @@ api_key=change-me
 mode=normal
 save_dir=sdmc:/mGBA
 vc_save_dir=sdmc:/3ds/Checkpoint/saves
+# locked_ids=my-hack-title,other-game
 
 [rom]
 rom_dir=sdmc:/roms/gba
@@ -216,9 +219,9 @@ rom_extension=.gba
 
 Launch from Homebrew Launcher.
 
-**Main menu:** **A** / **X** / **Y** as labeled; **START** exits to the “Press START to exit” end screen (or exits immediately if you already chose **START** on the post-sync screen).
+**Main menu:** **A** / **X** / **Y** as labeled; **START** exits to the “Press START to exit” end screen (or exits immediately if you already chose **START** on the post-sync screen). A **status line** shows last sync / server / Dropbox (from **`.gbasync-status`** in the active save folder).
 
-**Full sync** uses a **confirm** screen (**A** continue, **B** / **START** back to menu — same pattern as other confirms in the app).
+**Auto sync** shows a **preview** of planned actions per game (**non-OK rows only**), then **A** applies or **B** / **START** returns to the menu. Preview is **confirm-only**. **Save viewer** (main menu **R**): **R** toggles lock for the highlighted row and updates **`sdmc:/3ds/gba-sync/config.ini`** (`locked_ids=`).
 
 After sync logs, a **done** screen appears: **A** returns to the main menu; **START** exits the app (skips the duplicate exit prompt).
 
@@ -251,10 +254,10 @@ pokemon-emerald: DOWNLOADED
 ## 5) Validate cross-device sync
 
 1. Run one client (Delta/Switch/3DS) and make save progress.
-2. On a console with newer progress, press **`A`** (full sync): **Switch** and **3DS** both use each game’s save **SHA256** and a small **`.gbasync-baseline`** file next to your `.sav` files (legacy **`.savesync-baseline`** is still supported; unreliable SD modification times are not used for merge decisions on either console). Or use upload-only (`X`) to force-push chosen saves.
+2. On a console with newer progress, press **`A`** (Auto sync): **Switch** and **3DS** both use each game’s save **SHA256** and a small **`.gbasync-baseline`** file next to your `.sav` files (legacy **`.savesync-baseline`** is still supported; unreliable SD modification times are not used for merge decisions on either console). Or use upload-only (`X`) to force-push chosen saves.
 3. On the other console, press **`A`** again or download-only (`Y`) to pull saves from the server.
 
-The first time a game has no baseline row yet, full sync logs **SKIP (no baseline yet)** — use **`X`** or **`Y`** once for that game so Auto can track changes afterward. If **local and server both diverged** from the last known baseline, **3DS** and **Switch** show a **Conflict** screen: **`X`** uploads local (with force), **`Y`** downloads from server, **`B`** skips for now.
+The first time a game has no baseline row yet, Auto sync logs **SKIP (no baseline yet)** — use **`X`** or **`Y`** once for that game so Auto can track changes afterward. If **local and server both diverged** from the last known baseline, **3DS** and **Switch** show a **Conflict** screen: **`X`** uploads local (with force), **`Y`** downloads from server, **`B`** skips for now.
 
 After a run, read the on-screen log, then use the **done** prompt (**A** / **+** on Switch; **A** / **START** on 3DS) so the menu does not clear immediately.
 
@@ -290,7 +293,7 @@ See **`server/README.md`** for the `DELETE` curl example.
 - **No cross-device update**: use `X` on source device, then `Y` on destination device.
 - **Conflicts**: check `GET /conflicts`, resolve via `POST /resolve/{game_id}`.
 - **“Ghost” saves after tests**: stale **`index.json`** rows — use **`DELETE /save/{game_id}`** or edit the index.
-- **Switch confirm goes to menu**: use **A** to confirm; **B** backs out; do not expect **+** to cancel on the confirm screen.
+- **Switch preview screen**: use **A** to run the planned sync; **B** backs out; **+** does not cancel there (avoids accidental backs).
 
 ## 8) Game ID normalization
 

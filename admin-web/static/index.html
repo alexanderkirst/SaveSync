@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GBAsync Admin</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>GBAsync Admin</h1>
+    <p class="sub">Read-only views and guarded actions. Uses the same origin as the API.</p>
+  </header>
+
+  <section id="login-panel" class="panel">
+    <h2>Sign in</h2>
+    <p class="hint">Set <code>GBASYNC_ADMIN_PASSWORD</code> on the server. Session cookie is HttpOnly.</p>
+    <form id="login-form">
+      <label>Password <input type="password" id="login-password" autocomplete="current-password" /></label>
+      <button type="submit">Sign in</button>
+      <span id="login-error" class="error"></span>
+    </form>
+  </section>
+
+  <main id="app-main" class="hidden">
+    <nav class="tabs">
+      <button type="button" data-tab="dash" class="active">Dashboard</button>
+      <button type="button" data-tab="saves">Saves</button>
+      <button type="button" data-tab="conflicts">Conflicts</button>
+      <button type="button" data-tab="routing">Index routing</button>
+      <button type="button" data-tab="slot">Slot map</button>
+      <button type="button" data-tab="actions">Actions</button>
+      <button type="button" id="btn-logout" class="logout">Sign out</button>
+    </nav>
+
+    <section id="tab-dash" class="tab-pane">
+      <h2>Dashboard</h2>
+      <pre id="dash-json" class="json"></pre>
+    </section>
+    <section id="tab-saves" class="tab-pane hidden">
+      <h2>Saves</h2>
+      <div class="table-wrap"><table id="tbl-saves"><thead><tr>
+        <th>game_id</th><th>sha256</th><th>size</th><th>conflict</th><th>last_modified</th><th></th>
+      </tr></thead><tbody></tbody></table></div>
+    </section>
+    <section id="tab-conflicts" class="tab-pane hidden">
+      <h2>Conflicts</h2>
+      <div class="table-wrap"><table id="tbl-conflicts"><thead><tr>
+        <th>game_id</th><th>sha256</th><th></th>
+      </tr></thead><tbody></tbody></table></div>
+    </section>
+    <section id="tab-routing" class="tab-pane hidden">
+      <h2>Aliases, ROM SHA1, Tombstones</h2>
+      <pre id="routing-json" class="json"></pre>
+    </section>
+    <section id="tab-slot" class="tab-pane hidden">
+      <h2>Delta slot map</h2>
+      <p id="slot-meta" class="hint"></p>
+      <pre id="slot-json" class="json"></pre>
+    </section>
+    <section id="tab-actions" class="tab-pane hidden">
+      <h2>Actions</h2>
+      <p class="hint">Destructive operations require typing the exact <code>game_id</code>.</p>
+      <div class="action-row">
+        <button type="button" id="btn-dropbox">Run Dropbox sync once</button>
+        <span id="dropbox-msg" class="msg"></span>
+      </div>
+      <div class="action-row">
+        <label>Resolve conflict for <input type="text" id="resolve-id" placeholder="game_id" /></label>
+        <button type="button" id="btn-resolve">POST resolve</button>
+        <span id="resolve-msg" class="msg"></span>
+      </div>
+      <div class="action-row">
+        <label>Delete save <input type="text" id="delete-id" placeholder="game_id" /></label>
+        <label>Confirm <input type="text" id="delete-confirm" placeholder="type game_id again" /></label>
+        <button type="button" id="btn-delete" class="danger">DELETE</button>
+        <span id="delete-msg" class="msg"></span>
+      </div>
+    </section>
+  </main>
+
+  <p id="global-msg" class="msg center"></p>
+  <script src="app.js"></script>
+</body>
+</html>

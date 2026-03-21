@@ -1,0 +1,106 @@
+GBAsync — Plan: Minimal admin web panel (longer-term)
+=====================================================
+**Baseline UI shipped in v0.1.6** — see `admin-web/README.md` and `docs/TODO.md` § Admin web UI. This file remains for **future extensions** (history, bulk ops, …).
+
+Source backlog: `docs/TODO.md` — “### Longer-term” → admin web panel extensions
+
+Stated goals
+  View: saves, aliases, slot-map, conflict flags.
+  Actions: trigger sync-once and reset-style operations safely.
+
+Existing API surface (server/app/main.py, server/README.md)
+  - GET /health — no API key (public liveness).
+  - GET /saves — API key; index-backed list with metadata (SaveListResponse).
+  - GET /conflicts — API key; subset with conflict flag.
+  - GET /save/{game_id}, GET /save/{game_id}/meta
+  - PUT /save/{game_id} — upload
+  - DELETE /save/{game_id} — remove index row + blob
+  - POST /resolve/{game_id} — clear conflict flag
+  - POST /dropbox/sync-once — runs bridge subprocess (mode must be delta_api or plain)
+
+Gaps vs “view aliases / slot-map”
+  - Aliases, rom_sha1 map, tombstones live in server/app/storage.py index JSON but are
+    NOT exposed by dedicated read endpoints today. GET /saves returns per-save rows, not
+    the full alias table.
+  - Slot map (delta_slot_map_path) is a bridge-side JSON file used by
+    bridge/delta_folder_server_sync.py (and related scripts), not part of the FastAPI
+    process unless the container mounts it and you add a read endpoint.
+
+Architecture options (minimal first)
+
+  Option A — Single-process “admin” as part of FastAPI
+    - Add routes under e.g. /admin/* with HTML (Jinja2) or static SPA served by StaticFiles.
+    - Pros: one container, one deploy. Cons: must bundle or link static assets carefully.
+
+  Option B — Static files + vanilla JS
+    - FastAPI serves a small index.html + JS that calls JSON APIs.
+    - Fastest path; no build step if you avoid React.
+
+  Option C — Separate tiny admin container
+    - Only if you want isolation; probably overkill for “minimal.”
+
+Authentication (critical)
+  - Reusing X-API-Key in browser JS is awkward (keys in localStorage are sensitive).
+  - Patterns:
+    1) Session login: admin password in env → server sets HttpOnly cookie + CSRF token;
+       backend proxies JSON to same SaveStore (duplicate Depends).
+    2) Browser Basic Auth in front of nginx for /admin only; APIs still use API key server-side
+       (env) — no key in JS.
+    3) Single-user: pre-shared admin token in Authorization header stored only for session
+       after login form POST (still use HttpOnly cookie for token).
+
+  Pick one before UI work; “safely” implies no API key embedded in static JS.
+
+Read APIs to add (minimal set)
+  - GET /admin/index-state or GET /admin/meta — returns aliases, tombstones, rom_sha1
+    (read-only), derived from SaveStore internal state with a new method like export_index().
+    Alternatively GET /admin/raw-index with same API key as today if you accept key in header
+    from curl only (not for browser).
+
+  - Slot map: either
+    - File path from env (e.g. GBASYNC_SLOT_MAP_PATH) read in admin route if file exists; or
+    - “Not configured” when bridge files not mounted — show honest empty state.
+
+Write / dangerous actions
+  - POST /dropbox/sync-once — already exists; wire button with confirm modal (“Runs bridge;
+    may take minutes”). Serialize awareness: server already uses locks for Dropbox sidecar.
+
+  - DELETE /save/{game_id} — destructive; require typed confirmation (game_id) in UI.
+
+  - POST /resolve/{game_id} — lower risk; still confirm.
+
+  - Optional “reset” — define precisely: if it means delete save + clear aliases pointing to
+    it, may need a compound server method; if it means only DELETE /save/{id}, document.
+
+UI pages (minimal)
+  1) Dashboard: health, save count, conflict count, Dropbox mode from env (read-only text).
+  2) Saves table: game_id, sha256 prefix, size, conflict, last_modified — from GET /saves.
+  3) Conflicts: filter from same data or GET /conflicts.
+  4) Aliases / routing: table from new read-only export (alias → canonical, tombstones).
+  5) Slot map: JSON viewer + pretty-print if file present.
+  6) Actions panel: “Run Dropbox sync once” (POST), per-row resolve / delete with modals.
+
+Safety checklist
+  - All mutating routes remain server-side validated (game_id path rules already in DELETE).
+  - Rate-limit or auth-gate admin routes separately from machine clients if needed.
+  - Do not log API keys; use redacted logs for admin actions.
+
+Docker / deploy
+  - server/Dockerfile: ensure static admin assets copied if embedded; or volume-mount admin/
+    for development.
+  - Document new env vars in .env.example (admin password, slot map path).
+
+Testing
+  - pytest: new routes return 401 without key / without admin session.
+  - Manual: run stack, open /admin, verify read-only views, run sync-once in test env.
+
+Out of scope (later backlog items)
+  - Profiles / namespaces (multiple API keys) — would change auth model.
+  - History restore UX — needs history listing endpoint and file browser.
+
+Suggested implementation order
+  1) Read-only index export endpoint + GET /saves already sufficient for saves/conflicts view.
+  2) Auth mechanism for /admin (cookie session recommended).
+  3) Static admin UI wired to JSON.
+  4) Slot map file read + display.
+  5) Wire POST actions with confirmations and user-visible outcomes (HTTP errors surfaced).

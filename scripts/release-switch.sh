@@ -57,17 +57,15 @@ rom_extension=.gba
 Run:
 1) Launch Homebrew Menu
 2) Start gbasync
-3) A = full sync (per-game newer local mtime vs server; may upload some, download others)
+3) A = Auto sync (SHA-256 + baseline; preview then apply; may upload some, download others)
 4) X = upload-only: confirm, then checkboxes (ALL SAVES or each game), + = OK, B = cancel
 5) Y = download-only: same pick list, then downloads selected games
 6) - = trigger Dropbox sync-once on server
 7) Press + to exit
 
-Expected status example:
-- Local saves: 3
-- Remote saves: 2
-- pokemon-emerald: UPLOADED
-- metroid-zero: DOWNLOADED
+Expected log examples:
+- Auto sync: after preview confirm, per-game lines only (e.g. pokemon-emerald: UPLOADED).
+- Upload/download modes: Local saves: N / Remote saves: M may appear, then per-game results.
 
 Troubleshooting:
 - config path must be sdmc:/switch/gba-sync/config.ini

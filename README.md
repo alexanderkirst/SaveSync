@@ -16,7 +16,7 @@ Delta has cloud sync, but it is Delta-specific. GBAsync provides one shared sync
 
 GBAsync uses a client-server model:
 
-- `server/`: FastAPI backend that stores save binaries + metadata
+- `server/`: FastAPI backend that stores save binaries + metadata (optional **`admin-web/`** static UI under `/admin/ui/`)
 - `bridge/`: desktop sync bridge for Delta save folders
 - `switch-client/`: Switch homebrew sync app (`.nro`)
 - `3ds-client/`: 3DS homebrew sync app (`.3dsx`)
@@ -29,6 +29,7 @@ Clients support explicit overwrite sync actions for predictable cross-device tra
 - [x] Delta bridge MVP
 - [x] Switch client MVP
 - [x] 3DS client MVP
+- [x] **Admin web UI** (optional; `GBASYNC_ADMIN_PASSWORD`, served at `/admin/ui/` — see `admin-web/README.md`)
 - [x] Release/packaging scripts
 - [x] End-user installation guides
 
@@ -42,7 +43,7 @@ cd server
 docker compose up -d
 ```
 
-With Docker, binary saves and `index.json` live in **`save_data/`** at the repo root (see `server/docker-compose.yml`). The image can also run **Dropbox sync in the background** - set `GBASYNC_DROPBOX_MODE` and related vars in the same root `.env` (see `USER_GUIDE.md` §1). For upload-driven sync bursts, use `GBASYNC_DROPBOX_SYNC_ON_UPLOAD=true` with `GBASYNC_DROPBOX_SYNC_DEBOUNCE_SECONDS=10` and keep `GBASYNC_DROPBOX_INTERVAL_SECONDS` long as fallback.
+With Docker, binary saves and `index.json` live in **`save_data/`** at the repo root (see `server/docker-compose.yml`). The image can also run **Dropbox sync in the background** - set `GBASYNC_DROPBOX_MODE` and related vars in the same root `.env` (see `docs/USER_GUIDE.md` §1). For upload-driven sync bursts, use `GBASYNC_DROPBOX_SYNC_ON_UPLOAD=true` with `GBASYNC_DROPBOX_SYNC_DEBOUNCE_SECONDS=10` and keep `GBASYNC_DROPBOX_INTERVAL_SECONDS` long as fallback.
 
 **Delta + `server_delta`:** The Dropbox API bridge only writes into Harmony `GameSave-*` slots that **already exist** for each ROM. Your 3DS upload goes to `/save/pokemon-fire-bpre`, but that blob is pushed to Dropbox **only** if Delta has a matching row—typically **Pokémon: Fire Red Version** (retail) with a save file. If your Dropbox folder only has BPRE *hacks* (e.g. Unbound, RedRocket) and no retail Fire Red entry, Fire Red’s server save will not appear in Delta until you open the retail game once in Delta (or use separate server ids per hack). Watch container logs for `[server_delta] note: server has /save/pokemon-fire-bpre but **no Delta GameSave row**`.
 
@@ -68,10 +69,10 @@ python bridge.py --config config.json --once
 Generate release artifacts:
 
 ```bash
-./scripts/release-server.sh v0.1.3
-./scripts/release-bridge.sh v0.1.3
-./scripts/release-switch.sh v0.1.3
-./scripts/release-3ds.sh v0.1.3
+./scripts/release-server.sh v0.1.6
+./scripts/release-bridge.sh v0.1.6
+./scripts/release-switch.sh v0.1.6
+./scripts/release-3ds.sh v0.1.6
 ```
 
 Then use:
@@ -81,9 +82,10 @@ Then use:
 
 ## Documentation
 
-- `USER_GUIDE.md`: full setup and usage guide
-- `TODO.md`: recently shipped items vs backlog
-- `RELEASE.md`: packaging and release workflow
+- `docs/USER_GUIDE.md`: full setup and usage guide
+- `docs/TODO.md`: recently shipped items vs backlog
+- `docs/RELEASE_NOTES_v0.1.6.md`: **v0.1.6** console + admin UI release notes
+- `docs/RELEASE.md`: packaging and release workflow
 - `dist/README.md`: dist artifact glossary and install pointers
 - `server/README.md`: server API and run details
 - `docs/HARDWARE_VALIDATION_CHECKLIST.md`: real-device validation checklist
@@ -102,12 +104,15 @@ This verifies upload and download flow in an isolated temp directory.
 
 ## Key Behaviors
 
-- **A / full sync (Auto):** Uses **SHA-256** plus **`.gbasync-baseline`** on the device (legacy **`.savesync-baseline`** is still read/written for compatibility). First time a `game_id` has no baseline row, Auto logs **SKIP (no baseline yet)** until you run **upload-only** or **download-only** once for that game. **Switch** asks for confirm (**A** continue, **B** back; **+** is not cancel on that screen). After any sync run, **Switch** shows **A** = main menu / **+** = exit; **3DS** shows **A** = main menu / **START** = exit app.
-- **X / upload-only** and **Y / download-only:** checklist UI (**ALL SAVES** or per-game); force upload or download for picks (Switch: **+** to run, **B** back; 3DS: **START** / **R** / **X** or **Y** to run, **B** back).
+- **A / Auto sync:** Uses **SHA-256** plus **`.gbasync-baseline`** on the device (legacy **`.savesync-baseline`** is still read/written for compatibility). **Plan → preview → apply:** the preview lists **non-OK** work only; **A** runs the plan, **B** cancels. **Already Up To Date** when every merged row is **OK** (not merely “nothing to upload/download” when everything is locked). First time a `game_id` has no baseline row, Auto logs **SKIP (no baseline yet)** until you run **upload-only** or **download-only** once for that game. **Switch:** **`+`** does not cancel the preview; after sync, **A** = main menu / **+** = exit in one step from the menu. **3DS:** **A** = main menu / **START** = exit app.
+- **Status line:** **`/.gbasync-status`** next to the baseline (last sync, server reachability, Dropbox last result). Main menu shows **Last sync** / **Server** / **Dropbox** on separate lines (Switch layout matches 3DS).
+- **Per-device locks:** optional **`[sync] locked_ids=`** in `config.ini`. **Save viewer** (main menu **R**) toggles locks and writes `config.ini`; locks are **not** edited from the Auto preview screen.
+- **X / upload-only** and **Y / download-only:** checklist (**ALL SAVES** or per-**`game_id`** row); rows show **`game_id` only**. Switch: **+** to run, **B** back. 3DS: **START** + **X** or **Y** to run, **B** back.
 - **Conflicts:** when local and server both diverged from baseline, a **Conflict** prompt (**X** / **Y** / **B**) on Switch and 3DS.
-- **`GET /saves`** on the server comes from **`index.json`**, not from re-scanning the save folder; **`DELETE /save/{game_id}`** cleans index + blob. See `server/README.md` and `USER_GUIDE.md`.
-- ROM-header-based **`game_id`** when `[rom]` is configured (bridge, Switch, 3DS); otherwise normalized save stem.
-- Atomic local writes; optional server version history; API-key auth.
+- **`GET /saves`** on the server comes from **`index.json`**, not from re-scanning the save folder; **`DELETE /save/{game_id}`** cleans index + blob. See `server/README.md` and `docs/USER_GUIDE.md`.
+- ROM-header-based **`game_id`** when `[rom]` is configured: homebrew clients read only a **512-byte prefix** of each matching ROM for the header (not the full ROM per save). Otherwise normalized save stem (bridge unchanged unless noted there).
+- **Admin UI:** with **`GBASYNC_ADMIN_PASSWORD`** set, open **`/admin/ui/`** on the server for saves, conflicts, index routing, optional slot map, and guarded actions (see `admin-web/README.md`).
+- Atomic local writes; optional server version history; API-key auth for the main API.
 
 ## Delta Dropbox Sync Notes
 
@@ -138,7 +143,7 @@ This verifies upload and download flow in an isolated temp directory.
 
 ## Contributing / next work
 
-See **`TODO.md`** for backlog. Broad themes: HTTPS on consoles, optional confirms for X/Y modes, deeper tests, and optional background sync.
+See **`docs/TODO.md`** for backlog. Broad themes: HTTPS on consoles, optional confirms for X/Y modes, deeper tests, admin UI extensions, and optional background sync.
 
 ## License
 

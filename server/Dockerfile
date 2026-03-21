@@ -5,6 +5,7 @@ COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server/app ./app
+COPY admin-web ./admin-web
 COPY server/write_bridge_config.py ./server/write_bridge_config.py
 COPY server/bridge_sidecar.py ./server/bridge_sidecar.py
 COPY server/docker-entrypoint.sh ./server/docker-entrypoint.sh

@@ -259,6 +259,16 @@ class SaveStore:
     def list_conflicts(self) -> list[SaveListItem]:
         return [item for item in self.list_saves() if item.conflict]
 
+    def export_index_routing(self) -> dict[str, dict[str, str]]:
+        """Read-only aliases / rom_sha1 / tombstones for admin UI."""
+        with self._lock:
+            state = self._read_index_state()
+        return {
+            "aliases": dict(state.aliases),
+            "rom_sha1": dict(state.rom_sha1),
+            "tombstones": dict(state.tombstones),
+        }
+
     def get_meta(self, game_id: str) -> SaveMeta | None:
         with self._lock:
             state = self._read_index_state()

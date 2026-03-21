@@ -80,7 +80,7 @@ rom_extension=.gba
 Run:
 1) Launch Homebrew Launcher
 2) Start gbasync
-3) A = full sync (per-game newer local mtime vs server; may upload some, download others)
+3) A = Auto sync (SHA-256 + baseline; preview then apply; may upload some, download others)
 4) X = upload-only: confirm, pick saves; START or R or X to run, B = cancel
 5) Y = download-only: pick saves; START or R or Y to run, B = cancel
 6) SELECT = trigger Dropbox sync-once on server

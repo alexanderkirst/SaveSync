@@ -2,7 +2,7 @@
 
 This document defines packaging and release steps for each component.
 
-For end-user setup and operation instructions, see `USER_GUIDE.md`.
+For end-user setup and operation instructions, see `docs/USER_GUIDE.md`.
 
 ## 1) Server release
 
@@ -15,12 +15,12 @@ Produces:
 Command:
 
 ```bash
-./scripts/release-server.sh v0.1.3
+./scripts/release-server.sh v0.1.6
 ```
 
 Artifacts:
 
-- `dist/server/gbasync-server-v0.1.3.tar`
+- `dist/server/gbasync-server-v0.1.6.tar`
 - `dist/server/.env.example`
 - `dist/server/docker-compose.yml`
 
@@ -33,12 +33,12 @@ Produces:
 Command:
 
 ```bash
-./scripts/release-bridge.sh v0.1.3
+./scripts/release-bridge.sh v0.1.6
 ```
 
 Artifact:
 
-- `dist/bridge/gbasync-bridge-v0.1.3.zip`
+- `dist/bridge/gbasync-bridge-v0.1.6.zip`
 
 ## 3) Switch release
 
@@ -51,12 +51,12 @@ Prerequisites:
 Command:
 
 ```bash
-./scripts/release-switch.sh v0.1.3
+./scripts/release-switch.sh v0.1.6
 ```
 
 Artifacts directory:
 
-- `dist/switch/gbasync-switch-v0.1.3/`
+- `dist/switch/gbasync-switch-v0.1.6/`
 
 Expected files (depending on build):
 
@@ -78,12 +78,12 @@ Prerequisites:
 Command:
 
 ```bash
-./scripts/release-3ds.sh v0.1.3
+./scripts/release-3ds.sh v0.1.6
 ```
 
 Artifacts directory:
 
-- `dist/3ds/gbasync-3ds-v0.1.3/`
+- `dist/3ds/gbasync-3ds-v0.1.6/`
 
 Expected files (depending on build):
 

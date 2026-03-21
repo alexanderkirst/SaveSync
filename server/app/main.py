@@ -8,15 +8,23 @@ import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .admin import router as admin_router
 from .auth import require_api_key
 from .models import SaveListResponse, SaveMeta
 from .storage import SaveStore
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Dev: server/app/main.py -> repo root has bridge/ and admin-web/.
+# Docker: /app/app/main.py -> /app has bridge/ and admin-web/.
+_here = Path(__file__).resolve()
+if (_here.parents[1] / "bridge").is_dir():
+    _REPO_ROOT = _here.parents[1]
+else:
+    _REPO_ROOT = _here.parents[2]
 _BRIDGE_DIR = _REPO_ROOT / "bridge"
 load_dotenv(_REPO_ROOT / ".env")
 
@@ -161,6 +169,20 @@ class ClientDebugReport(BaseModel):
     untrusted_local_saves: int = 0
 
 
+@app.get("/", response_model=None)
+def root(request: Request) -> RedirectResponse | dict[str, str]:
+    """Browsers get sent to the admin UI; API clients (e.g. curl without ``text/html``) get JSON links."""
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return RedirectResponse(url="/admin/ui/", status_code=302)
+    return {
+        "service": "GBAsync",
+        "health": "/health",
+        "admin_ui": "/admin/ui/",
+        "openapi": "/docs",
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -292,3 +314,10 @@ def delete_save(game_id: str) -> JSONResponse:
     if not store.remove(game_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Save not in index")
     return JSONResponse(status_code=200, content={"game_id": game_id, "deleted": True})
+
+
+app.include_router(admin_router)
+
+_admin_static = _REPO_ROOT / "admin-web" / "static"
+if _admin_static.is_dir():
+    app.mount("/admin/ui", StaticFiles(directory=str(_admin_static), html=True), name="admin_ui")

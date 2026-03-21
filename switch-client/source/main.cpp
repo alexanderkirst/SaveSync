@@ -1,4 +1,5 @@
 #include <switch.h>
+#include <switch/services/spsm.h>
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -30,6 +31,7 @@ struct Config {
   std::string save_dir = "sdmc:/mGBA";
   std::string rom_dir = "sdmc:/mGBA";
   std::string rom_extension = ".gba";
+  std::set<std::string> locked_ids;
 };
 
 struct SaveMeta {
@@ -66,6 +68,7 @@ enum class SyncAction {
   UploadOnly,
   DownloadOnly,
   DropboxSync,
+  SaveViewer,
 };
 
 struct SyncManualFilter {
@@ -78,6 +81,13 @@ static std::string trim(const std::string& input) {
   if (start == std::string::npos) return "";
   const auto end = input.find_last_not_of(" \t\r\n");
   return input.substr(start, end - start + 1);
+}
+
+static std::string to_lower(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return s;
 }
 
 static Config load_config(const std::string& path) {
@@ -101,17 +111,18 @@ static Config load_config(const std::string& path) {
     if (section == "server" && key == "url") cfg.server_url = value;
     if (section == "server" && key == "api_key") cfg.api_key = value;
     if (section == "sync" && key == "save_dir") cfg.save_dir = value;
+    if (section == "sync" && key == "locked_ids") {
+      std::stringstream ss(value);
+      std::string tok;
+      while (std::getline(ss, tok, ',')) {
+        tok = trim(tok);
+        if (!tok.empty()) cfg.locked_ids.insert(to_lower(tok));
+      }
+    }
     if (section == "rom" && key == "rom_dir") cfg.rom_dir = value;
     if (section == "rom" && key == "rom_extension") cfg.rom_extension = value;
   }
   return cfg;
-}
-
-static std::string to_lower(std::string s) {
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return s;
 }
 
 static std::string sanitize_game_id(const std::string& stem) {
@@ -160,15 +171,25 @@ static std::string game_id_from_rom_header(const std::vector<unsigned char>& rom
   return sanitize_game_id(combined);
 }
 
+/* ROM title/gamecode live in the first ~0xB0 bytes; avoid reading multi‑MiB ROMs per save. */
+static std::vector<unsigned char> read_file_prefix(const std::string& path, size_t max_bytes) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file.good()) return {};
+  std::vector<unsigned char> out(max_bytes);
+  file.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(max_bytes));
+  out.resize(static_cast<size_t>(file.gcount()));
+  return out;
+}
+
 static std::string resolve_game_id_for_save(const Config& cfg, const std::string& save_name) {
   const std::string stem = file_stem(save_name);
   if (!cfg.rom_dir.empty()) {
     std::string ext = cfg.rom_extension.empty() ? ".gba" : cfg.rom_extension;
     if (!ext.empty() && ext[0] != '.') ext = "." + ext;
     const std::string rom_path = cfg.rom_dir + "/" + stem + ext;
-    const std::vector<unsigned char> rom_bytes = read_file(rom_path);
-    if (!rom_bytes.empty()) {
-      const std::string from_header = game_id_from_rom_header(rom_bytes);
+    const std::vector<unsigned char> rom_hdr = read_file_prefix(rom_path, 512);
+    if (rom_hdr.size() >= 0xB0) {
+      const std::string from_header = game_id_from_rom_header(rom_hdr);
       if (!from_header.empty()) return from_header;
     }
   }
@@ -759,6 +780,361 @@ static void baseline_upsert(std::vector<BaselineRow>& rows, const std::string& i
   rows.push_back({id, sha});
 }
 
+static std::string gbasync_status_path(const Config& cfg) {
+  std::string d = cfg.save_dir;
+  while (!d.empty() && (d.back() == '/' || d.back() == '\\')) d.pop_back();
+  return d + "/.gbasync-status";
+}
+
+struct SyncStatusSnap {
+  std::time_t last_unix = 0;
+  bool last_ok = false;
+  bool server_ok = false;
+  int dropbox = -1;
+  std::string err;
+};
+
+static bool sync_status_load(const Config& cfg, SyncStatusSnap* out) {
+  std::ifstream in(gbasync_status_path(cfg));
+  if (!in) return false;
+  std::string line;
+  while (std::getline(in, line)) {
+    const auto eq = line.find('=');
+    if (eq == std::string::npos) continue;
+    std::string k = trim(line.substr(0, eq));
+    std::string v = trim(line.substr(eq + 1));
+    if (k == "t") out->last_unix = static_cast<std::time_t>(std::strtoll(v.c_str(), nullptr, 10));
+    if (k == "ok") out->last_ok = (v == "1");
+    if (k == "srv") out->server_ok = (v == "1");
+    if (k == "db") {
+      if (v == "u") out->dropbox = -1;
+      else if (v == "0") out->dropbox = 0;
+      else if (v == "1") out->dropbox = 1;
+    }
+    if (k == "e") out->err = v;
+  }
+  return true;
+}
+
+static bool sync_status_save(const Config& cfg, const SyncStatusSnap& s) {
+  std::ostringstream o;
+  o << "v=1\n";
+  o << "t=" << static_cast<long long>(s.last_unix) << "\n";
+  o << "ok=" << (s.last_ok ? "1" : "0") << "\n";
+  o << "srv=" << (s.server_ok ? "1" : "0") << "\n";
+  if (s.dropbox < 0) o << "db=u\n";
+  else o << "db=" << s.dropbox << "\n";
+  o << "e=" << s.err << "\n";
+  const std::string str = o.str();
+  std::vector<unsigned char> data(str.begin(), str.end());
+  return write_atomic(gbasync_status_path(cfg), data);
+}
+
+static void sync_status_after_server_work(const Config& cfg, bool last_ok, bool server_ok, const char* err_short) {
+  SyncStatusSnap s{};
+  (void)sync_status_load(cfg, &s);
+  s.last_unix = std::time(nullptr);
+  s.last_ok = last_ok;
+  s.server_ok = server_ok;
+  s.err = err_short ? err_short : "";
+  (void)sync_status_save(cfg, s);
+}
+
+static void sync_status_after_dropbox_only(const Config& cfg, bool http_ok) {
+  SyncStatusSnap s{};
+  (void)sync_status_load(cfg, &s);
+  s.last_unix = std::time(nullptr);
+  s.last_ok = http_ok;
+  s.server_ok = http_ok;
+  s.dropbox = http_ok ? 1 : 0;
+  s.err.clear();
+  (void)sync_status_save(cfg, s);
+}
+
+static void sync_status_print_menu(const Config& cfg) {
+  SyncStatusSnap s{};
+  if (!sync_status_load(cfg, &s)) {
+    printf("Last sync: (none)\n");
+    printf("Server: —\n");
+    printf("Dropbox: —\n\n");
+    return;
+  }
+  char tbuf[32] = "unknown";
+  if (s.last_unix > 0) {
+    std::tm tm_utc{};
+    gmtime_r(&s.last_unix, &tm_utc);
+    std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M UTC", &tm_utc);
+  }
+  const char* srv = s.server_ok ? "OK" : "fail";
+  const char* db = (s.dropbox < 0) ? "—" : (s.dropbox ? "OK" : "fail");
+  const char* ok = s.last_ok ? "OK" : "fail";
+  printf("Last sync: %s %s\n", ok, tbuf);
+  printf("Server: %s\n", srv);
+  printf("Dropbox: %s\n", db);
+  if (!s.err.empty()) printf("Last error: %.60s\n", s.err.c_str());
+  printf("\n");
+}
+
+enum class AutoPlanKind {
+  Locked,
+  Ok,
+  Upload,
+  Download,
+  SkipNoBaseline,
+  Conflict,
+};
+
+struct AutoPlanRow {
+  std::string id;
+  AutoPlanKind kind = AutoPlanKind::Ok;
+};
+
+static AutoPlanKind classify_auto_row(
+    const std::string& id,
+    bool has_l,
+    bool has_r,
+    const LocalSave* l,
+    const SaveMeta* r,
+    const std::vector<BaselineRow>& baseline,
+    bool locked) {
+  if (has_l && has_r) {
+    if (l->sha256 == r->sha256) return AutoPlanKind::Ok;
+    if (locked) return AutoPlanKind::Locked;
+    std::string base_sha;
+    if (!baseline_get_sha(baseline, id, &base_sha)) return AutoPlanKind::SkipNoBaseline;
+    const bool loc_eq = (strcasecmp(l->sha256.c_str(), base_sha.c_str()) == 0);
+    const bool rem_eq = (strcasecmp(r->sha256.c_str(), base_sha.c_str()) == 0);
+    if (loc_eq && !rem_eq) return AutoPlanKind::Download;
+    if (!loc_eq && rem_eq) return AutoPlanKind::Upload;
+    if (!loc_eq && !rem_eq) return AutoPlanKind::Conflict;
+  } else if (has_l && !has_r) {
+    return AutoPlanKind::Upload;
+  } else if (!has_l && has_r) {
+    return AutoPlanKind::Download;
+  }
+  return AutoPlanKind::Ok;
+}
+
+static bool parse_ini_key_value(const std::string& line, std::string* key, std::string* val) {
+  const auto eq = line.find('=');
+  if (eq == std::string::npos) return false;
+  *key = trim(line.substr(0, eq));
+  *val = trim(line.substr(eq + 1));
+  return !key->empty();
+}
+
+static bool save_locked_ids_to_ini(const std::string& path, const std::set<std::string>& locked) {
+  std::vector<std::string> lines;
+  {
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) lines.push_back(line);
+  }
+  std::ostringstream joined;
+  for (auto it = locked.begin(); it != locked.end(); ++it) {
+    if (it != locked.begin()) joined << ",";
+    joined << *it;
+  }
+  const std::string new_val = joined.str();
+
+  bool in_sync = false;
+  bool replaced = false;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const std::string t = trim(lines[i]);
+    if (t.size() >= 2 && t.front() == '[' && t.back() == ']') {
+      in_sync = (t == "[sync]");
+      continue;
+    }
+    if (in_sync) {
+      std::string k;
+      std::string v;
+      if (parse_ini_key_value(lines[i], &k, &v) && k == "locked_ids") {
+        lines[i] = std::string("locked_ids=") + new_val;
+        replaced = true;
+        break;
+      }
+    }
+  }
+  if (!replaced) {
+    for (size_t i = 0; i < lines.size(); ++i) {
+      if (trim(lines[i]) == "[sync]") {
+        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(i + 1), std::string("locked_ids=") + new_val);
+        replaced = true;
+        break;
+      }
+    }
+  }
+  if (!replaced) {
+    if (!lines.empty()) lines.push_back("");
+    lines.push_back("[sync]");
+    lines.push_back(std::string("locked_ids=") + new_val);
+  }
+  std::ostringstream out;
+  for (size_t i = 0; i < lines.size(); ++i) out << lines[i] << "\n";
+  const std::string data = out.str();
+  return write_atomic(path, std::vector<unsigned char>(data.begin(), data.end()));
+}
+
+static void build_auto_plan_vector(
+    const Config& cfg,
+    const std::vector<std::string>& merge_ids,
+    const std::map<std::string, LocalSave>& local_by_id,
+    const std::map<std::string, SaveMeta>& remote,
+    const std::vector<BaselineRow>& baseline,
+    std::vector<AutoPlanRow>& plan) {
+  plan.clear();
+  plan.reserve(merge_ids.size());
+  for (const std::string& id : merge_ids) {
+    auto lit = local_by_id.find(id);
+    auto rit = remote.find(id);
+    const bool has_l = lit != local_by_id.end();
+    const bool has_r = rit != remote.end();
+    const bool locked = cfg.locked_ids.count(to_lower(id)) > 0;
+    AutoPlanKind k = AutoPlanKind::Ok;
+    if (has_l && has_r) {
+      k = classify_auto_row(id, true, true, &lit->second, &rit->second, baseline, locked);
+    } else if (has_l && !has_r) {
+      k = locked ? AutoPlanKind::Locked : AutoPlanKind::Upload;
+    } else if (!has_l && has_r) {
+      k = locked ? AutoPlanKind::Locked : AutoPlanKind::Download;
+    }
+    plan.push_back({id, k});
+  }
+}
+
+static void recount_auto_plan(const std::vector<AutoPlanRow>& plan, int* nu, int* nd, int* ns, int* nc, int* nl, int* nk) {
+  int u = 0, d = 0, s = 0, c = 0, l = 0, k = 0;
+  for (const auto& row : plan) {
+    switch (row.kind) {
+      case AutoPlanKind::Upload:
+        u++;
+        break;
+      case AutoPlanKind::Download:
+        d++;
+        break;
+      case AutoPlanKind::SkipNoBaseline:
+        s++;
+        break;
+      case AutoPlanKind::Conflict:
+        c++;
+        break;
+      case AutoPlanKind::Locked:
+        l++;
+        break;
+      case AutoPlanKind::Ok:
+        k++;
+        break;
+    }
+  }
+  if (nu) *nu = u;
+  if (nd) *nd = d;
+  if (ns) *ns = s;
+  if (nc) *nc = c;
+  if (nl) *nl = l;
+  if (nk) *nk = k;
+}
+
+static const char* auto_plan_kind_label(AutoPlanKind k) {
+  switch (k) {
+    case AutoPlanKind::Locked:
+      return "SKIP (locked)";
+    case AutoPlanKind::Ok:
+      return "OK";
+    case AutoPlanKind::Upload:
+      return "UPLOAD";
+    case AutoPlanKind::Download:
+      return "DOWNLOAD";
+    case AutoPlanKind::SkipNoBaseline:
+      return "SKIP (no baseline)";
+    case AutoPlanKind::Conflict:
+      return "CONFLICT (prompt)";
+    default:
+      return "?";
+  }
+}
+
+static constexpr const char kSwitchConfigIni[] = "sdmc:/switch/gba-sync/config.ini";
+
+static bool preview_auto_plan(
+    PadState* pad,
+    Config& cfg,
+    const std::vector<std::string>& merge_ids,
+    const std::map<std::string, LocalSave>& local_by_id,
+    const std::map<std::string, SaveMeta>& remote,
+    const std::vector<BaselineRow>& baseline,
+    std::vector<AutoPlanRow>& plan) {
+  int nu = 0, nd = 0, ns = 0, nc = 0, nl = 0, nk = 0;
+  build_auto_plan_vector(cfg, merge_ids, local_by_id, remote, baseline, plan);
+  recount_auto_plan(plan, &nu, &nd, &ns, &nc, &nl, &nk);
+
+  std::vector<size_t> filt;
+  filt.reserve(plan.size());
+  for (size_t i = 0; i < plan.size(); i++) {
+    if (plan[i].kind != AutoPlanKind::Ok) filt.push_back(i);
+  }
+  int cursor = 0;
+  constexpr int kVisible = 14;
+  int scroll = 0;
+  const int n_filt = static_cast<int>(filt.size());
+  int total_rows = std::max(1, n_filt);
+  bool dirty = true;
+
+  constexpr u64 kSyncMask =
+      HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y | HidNpadButton_Plus;
+  while (appletMainLoop()) {
+    padUpdate(pad);
+    (void)padGetButtonsDown(pad);
+    if ((padGetButtons(pad) & kSyncMask) == 0) break;
+    consoleUpdate(NULL);
+  }
+
+  while (appletMainLoop()) {
+    padUpdate(pad);
+    const u64 down = padGetButtonsDown(pad);
+    if (down & HidNpadButton_A) return true;
+    if (down & HidNpadButton_B) return false;
+    if (n_filt > 0) {
+      if (down & HidNpadButton_Up) {
+        cursor = (cursor + total_rows - 1) % total_rows;
+        dirty = true;
+      }
+      if (down & HidNpadButton_Down) {
+        cursor = (cursor + 1) % total_rows;
+        dirty = true;
+      }
+      if (cursor < scroll) scroll = cursor;
+      if (cursor >= scroll + kVisible) scroll = cursor - kVisible + 1;
+      if (scroll < 0) scroll = 0;
+      const int max_scroll = std::max(0, total_rows - kVisible);
+      if (scroll > max_scroll) scroll = max_scroll;
+    }
+
+    if (!dirty) {
+      consoleUpdate(NULL);
+      continue;
+    }
+
+    consoleClear();
+    printf("--- Sync preview ---\n");
+    printf("UP:%d DOWN:%d SKIP:%d CONF:%d LOCK:%d\n", nu, nd, ns, nc, nl);
+    printf("\n");
+    {
+      constexpr int kPrevCol = 20;
+      printf("%-*s%s\n", kPrevCol, "A: confirm", "");
+      printf("%-*s%s\n", kPrevCol, "B: back", "");
+    }
+    printf("\n");
+    for (int row = scroll; row < std::min(scroll + kVisible, n_filt); row++) {
+      const char mark = (row == cursor) ? '>' : ' ';
+      const AutoPlanRow& pr = plan[filt[static_cast<size_t>(row)]];
+      printf("%c %.28s  %s\n", mark, pr.id.c_str(), auto_plan_kind_label(pr.kind));
+    }
+    dirty = false;
+    consoleUpdate(NULL);
+  }
+  return false;
+}
+
 static void debug_report_sync_start_switch(const Config& cfg, const std::vector<LocalSave>& local) {
   int untrusted = 0;
   for (const auto& s : local) {
@@ -919,6 +1295,7 @@ static bool pick_upload_selection(PadState* pad, const Config& cfg, SyncManualFi
   int cursor = 0;
   int scroll = 0;
   constexpr int kVisible = 16;
+  bool dirty = true;
 
   while (appletMainLoop()) {
     padUpdate(pad);
@@ -942,9 +1319,11 @@ static bool pick_upload_selection(PadState* pad, const Config& cfg, SyncManualFi
     const int total_rows = n + 1;
     if (down & HidNpadButton_Up) {
       cursor = (cursor + total_rows - 1) % total_rows;
+      dirty = true;
     }
     if (down & HidNpadButton_Down) {
       cursor = (cursor + 1) % total_rows;
+      dirty = true;
     }
     if (down & HidNpadButton_A) {
       if (cursor == 0) {
@@ -958,6 +1337,7 @@ static bool pick_upload_selection(PadState* pad, const Config& cfg, SyncManualFi
           if (!picked[static_cast<size_t>(i)]) master_all = false;
         }
       }
+      dirty = true;
     }
 
     if (cursor < scroll) scroll = cursor;
@@ -965,6 +1345,11 @@ static bool pick_upload_selection(PadState* pad, const Config& cfg, SyncManualFi
     if (scroll < 0) scroll = 0;
     const int max_scroll = std::max(0, total_rows - kVisible);
     if (scroll > max_scroll) scroll = max_scroll;
+
+    if (!dirty) {
+      consoleUpdate(NULL);
+      continue;
+    }
 
     consoleClear();
     printf("Upload: choose saves\n");
@@ -976,13 +1361,13 @@ static bool pick_upload_selection(PadState* pad, const Config& cfg, SyncManualFi
       } else {
         const LocalSave& L = locals[static_cast<size_t>(row - 1)];
         printf(
-            "%c [%c] %.28s (%.36s)\n",
+            "%c [%c] %.28s\n",
             mark,
             picked[static_cast<size_t>(row - 1)] ? 'x' : ' ',
-            L.game_id.c_str(),
-            L.name.c_str());
+            L.game_id.c_str());
       }
     }
+    dirty = false;
     consoleUpdate(NULL);
   }
   return false;
@@ -1012,6 +1397,7 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
   int cursor = 0;
   int scroll = 0;
   constexpr int kVisible = 16;
+  bool dirty = true;
 
   while (appletMainLoop()) {
     padUpdate(pad);
@@ -1035,9 +1421,11 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
     const int total_rows = n + 1;
     if (down & HidNpadButton_Up) {
       cursor = (cursor + total_rows - 1) % total_rows;
+      dirty = true;
     }
     if (down & HidNpadButton_Down) {
       cursor = (cursor + 1) % total_rows;
+      dirty = true;
     }
     if (down & HidNpadButton_A) {
       if (cursor == 0) {
@@ -1051,6 +1439,7 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
           if (!picked[static_cast<size_t>(i)]) master_all = false;
         }
       }
+      dirty = true;
     }
 
     if (cursor < scroll) scroll = cursor;
@@ -1058,6 +1447,11 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
     if (scroll < 0) scroll = 0;
     const int max_scroll = std::max(0, total_rows - kVisible);
     if (scroll > max_scroll) scroll = max_scroll;
+
+    if (!dirty) {
+      consoleUpdate(NULL);
+      continue;
+    }
 
     consoleClear();
     printf("Download: choose saves\n");
@@ -1068,30 +1462,139 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
         printf("%c [%c] ALL SAVES\n", mark, master_all ? 'x' : ' ');
       } else {
         const SaveMeta& R = rows[static_cast<size_t>(row - 1)].second;
-        const char* hint = R.filename_hint.empty() ? "-" : R.filename_hint.c_str();
         printf(
-            "%c [%c] %.28s (%.36s)\n",
+            "%c [%c] %.28s\n",
             mark,
             picked[static_cast<size_t>(row - 1)] ? 'x' : ' ',
-            R.game_id.c_str(),
-            hint);
+            R.game_id.c_str());
       }
     }
+    dirty = false;
     consoleUpdate(NULL);
   }
   return false;
 }
 
+static void save_viewer_switch(PadState* pad, Config& cfg) {
+  auto locals = scan_local_saves(cfg, cfg.save_dir);
+  std::map<std::string, LocalSave> local_by_id;
+  for (const auto& s : locals) local_by_id[s.game_id] = s;
+  int status = 0;
+  std::vector<unsigned char> body;
+  if (!http_request(cfg, "GET", "/saves", {}, status, body) || status != 200) {
+    consoleClear();
+    printf("Save viewer: GET /saves failed");
+    if (status > 0) printf(" (HTTP %d)", status);
+    printf("\nB: back\n");
+    consoleUpdate(NULL);
+    while (appletMainLoop()) {
+      padUpdate(pad);
+      if (padGetButtonsDown(pad) & HidNpadButton_B) return;
+      consoleUpdate(NULL);
+    }
+    return;
+  }
+  std::string json(body.begin(), body.end());
+  auto remote = parse_saves_json(json);
+  std::vector<std::string> merge_ids;
+  merge_ids.reserve(local_by_id.size() + remote.size());
+  for (const auto& [id, _] : local_by_id) merge_ids.push_back(id);
+  for (const auto& [id, _] : remote) {
+    if (!local_by_id.count(id)) merge_ids.push_back(id);
+  }
+  std::sort(merge_ids.begin(), merge_ids.end());
+  if (merge_ids.empty()) {
+    consoleClear();
+    printf("Save viewer: no saves (local or server).\n");
+    printf("B: back\n");
+    consoleUpdate(NULL);
+    while (appletMainLoop()) {
+      padUpdate(pad);
+      if (padGetButtonsDown(pad) & HidNpadButton_B) return;
+      consoleUpdate(NULL);
+    }
+    return;
+  }
+  int cursor = 0;
+  int scroll = 0;
+  constexpr int kVisible = 16;
+  const int total_rows = static_cast<int>(merge_ids.size());
+  bool dirty = true;
+  while (appletMainLoop()) {
+    padUpdate(pad);
+    const u64 down = padGetButtonsDown(pad);
+    if (down & HidNpadButton_B) return;
+    if (down & HidNpadButton_R) {
+      const std::string& gid = merge_ids[static_cast<size_t>(cursor)];
+      const std::string lk = to_lower(gid);
+      if (cfg.locked_ids.count(lk)) {
+        cfg.locked_ids.erase(lk);
+      } else {
+        cfg.locked_ids.insert(lk);
+      }
+      (void)save_locked_ids_to_ini(kSwitchConfigIni, cfg.locked_ids);
+      dirty = true;
+    }
+    if (down & HidNpadButton_Up) {
+      cursor = (cursor + total_rows - 1) % total_rows;
+      dirty = true;
+    }
+    if (down & HidNpadButton_Down) {
+      cursor = (cursor + 1) % total_rows;
+      dirty = true;
+    }
+    if (cursor < scroll) scroll = cursor;
+    if (cursor >= scroll + kVisible) scroll = cursor - kVisible + 1;
+    if (scroll < 0) scroll = 0;
+    const int max_scroll = std::max(0, total_rows - kVisible);
+    if (scroll > max_scroll) scroll = max_scroll;
+
+    if (!dirty) {
+      consoleUpdate(NULL);
+      continue;
+    }
+
+    consoleClear();
+    printf("--- Save viewer (lock for Auto) ---\n");
+    printf("\n");
+    {
+      constexpr int kMenuLeftCol = 22;
+      printf("%-*s%s\n", kMenuLeftCol, "UP/DOWN: move", "");
+      printf("%-*s%s\n", kMenuLeftCol, "R: toggle lock -> config", "");
+      printf("%-*s%s\n", kMenuLeftCol, "B: back", "");
+    }
+    printf("\n");
+    for (int row = scroll; row < std::min(scroll + kVisible, total_rows); row++) {
+      const char mark = (row == cursor) ? '>' : ' ';
+      const std::string& id = merge_ids[static_cast<size_t>(row)];
+      const std::string lk = to_lower(id);
+      const char* tag = cfg.locked_ids.count(lk) ? "[L]" : "   ";
+      printf("%c%s %.28s\n", mark, tag, id.c_str());
+    }
+    dirty = false;
+    consoleUpdate(NULL);
+  }
+}
+
 static std::vector<std::string> run_sync(
-    const Config& cfg,
+    Config& cfg,
     SyncAction action,
     const SyncManualFilter* xy_filter,
-    PadState* pad) {
+    PadState* pad,
+    bool* out_already_up_to_date) {
+  if (out_already_up_to_date) *out_already_up_to_date = false;
   std::vector<std::string> logs;
+  if (action == SyncAction::Auto) {
+    printf("\n");
+    printf("Scanning local saves...\n");
+    consoleUpdate(NULL);
+  }
   auto local = scan_local_saves(cfg, cfg.save_dir);
   std::map<std::string, LocalSave> local_by_id;
   for (const auto& s : local) local_by_id[s.game_id] = s;
-  logs.push_back("Local saves: " + std::to_string(local.size()));
+  if (action != SyncAction::Auto) {
+    logs.push_back("Local saves: " + std::to_string(local.size()));
+  }
 
   std::vector<BaselineRow> baseline = baseline_load(cfg);
 
@@ -1105,11 +1608,14 @@ static std::vector<std::string> run_sync(
     } else {
       logs.push_back("ERROR: GET /saves failed (network/connect)");
     }
+    sync_status_after_server_work(cfg, false, false, "GET /saves");
     return logs;
   }
   std::string json(body.begin(), body.end());
   auto remote = parse_saves_json(json);
-  logs.push_back("Remote saves: " + std::to_string(remote.size()));
+  if (action != SyncAction::Auto) {
+    logs.push_back("Remote saves: " + std::to_string(remote.size()));
+  }
 
   const std::string plat = "switch-homebrew";
 
@@ -1120,6 +1626,7 @@ static std::vector<std::string> run_sync(
         baseline_upsert(baseline, entry.first, entry.second.sha256);
     }
     if (!baseline_save(cfg, baseline)) logs.push_back("WARN: could not write .gbasync-baseline");
+    sync_status_after_server_work(cfg, true, true, "");
     return logs;
   }
 
@@ -1129,6 +1636,7 @@ static std::vector<std::string> run_sync(
       if (get_save_log(cfg, id, r, logs)) baseline_upsert(baseline, id, r.sha256);
     }
     if (!baseline_save(cfg, baseline)) logs.push_back("WARN: could not write .gbasync-baseline");
+    sync_status_after_server_work(cfg, true, true, "");
     return logs;
   }
 
@@ -1141,17 +1649,50 @@ static std::vector<std::string> run_sync(
     if (!local_by_id.count(id)) merge_ids.push_back(id);
   }
 
+  std::vector<AutoPlanRow> plan;
+  build_auto_plan_vector(cfg, merge_ids, local_by_id, remote, baseline, plan);
+  int nu = 0, nd = 0, ns = 0, nc = 0, nl = 0, nk = 0;
+  recount_auto_plan(plan, &nu, &nd, &ns, &nc, &nl, &nk);
+  /* All rows OK (in sync). Not nu+nd+ns+nc==0 — that matches "all locked" too. */
+  if (nk == static_cast<int>(plan.size())) {
+    for (const std::string& id : merge_ids) {
+      if (cfg.locked_ids.count(to_lower(id)) > 0) continue;
+      auto lit = local_by_id.find(id);
+      auto rit = remote.find(id);
+      if (lit != local_by_id.end() && rit != remote.end() && lit->second.sha256 == rit->second.sha256) {
+        baseline_upsert(baseline, id, lit->second.sha256);
+      }
+    }
+    if (!baseline_save(cfg, baseline)) logs.push_back("WARN: could not write .gbasync-baseline");
+    sync_status_after_server_work(cfg, true, true, "");
+    logs.push_back("");
+    logs.push_back("Already Up To Date");
+    if (out_already_up_to_date) *out_already_up_to_date = true;
+    return logs;
+  }
+
+  if (!pad || !preview_auto_plan(pad, cfg, merge_ids, local_by_id, remote, baseline, plan)) {
+    logs.push_back("Preview cancelled.");
+    return logs;
+  }
+
+  /* Blank line before per-game apply lines (matches 3DS printf("\n") after confirm). */
+  logs.push_back("");
+
   for (const std::string& id : merge_ids) {
     auto lit = local_by_id.find(id);
     auto rit = remote.find(id);
     const bool has_l = lit != local_by_id.end();
     const bool has_r = rit != remote.end();
+    if (cfg.locked_ids.count(to_lower(id)) > 0) {
+      logs.push_back(id + ": SKIP (locked on this device)");
+      continue;
+    }
 
     if (has_l && has_r) {
       const LocalSave& l = lit->second;
       const SaveMeta& r = rit->second;
       if (l.sha256 == r.sha256) {
-        logs.push_back(id + ": OK");
         baseline_upsert(baseline, id, l.sha256);
         continue;
       }
@@ -1184,6 +1725,7 @@ static std::vector<std::string> run_sync(
   }
 
   if (!baseline_save(cfg, baseline)) logs.push_back("WARN: could not write .gbasync-baseline");
+  sync_status_after_server_work(cfg, true, true, "");
   return logs;
 }
 
@@ -1194,12 +1736,15 @@ static std::vector<std::string> run_dropbox_sync_once(const Config& cfg) {
   std::vector<unsigned char> resp;
   if (!http_request(cfg, "POST", "/dropbox/sync-once", body, status, resp, "application/json")) {
     logs.push_back("Dropbox sync request: ERROR(request)");
+    sync_status_after_dropbox_only(cfg, false);
     return logs;
   }
   if (status == 200) {
     logs.push_back("Dropbox sync request: OK");
+    sync_status_after_dropbox_only(cfg, true);
   } else {
     logs.push_back("Dropbox sync request: HTTP " + std::to_string(status));
+    sync_status_after_dropbox_only(cfg, false);
   }
   return logs;
 }
@@ -1224,6 +1769,10 @@ static bool choose_action(PadState* pad, SyncAction* out_action) {
       *out_action = SyncAction::DropboxSync;
       return true;
     }
+    if (down & HidNpadButton_R) {
+      *out_action = SyncAction::SaveViewer;
+      return true;
+    }
     if (down & HidNpadButton_Plus) {
       return false;
     }
@@ -1232,38 +1781,27 @@ static bool choose_action(PadState* pad, SyncAction* out_action) {
   return false;
 }
 
-static bool confirm_auto_sync(PadState* pad) {
-  printf("\n--- Confirm (full sync) ---\n");
-  printf("Uses .gbasync-baseline hashes (legacy .savesync-baseline supported).\n");
-  printf("Both-changed conflicts: X or Y on prompt. B skips.\n\n");
-  printf("A: continue   B: back to main menu\n\n");
-
-  /* Idle out the main-menu press; + was being read as cancel on this screen. */
-  constexpr u64 kSyncMask =
-      HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y | HidNpadButton_Plus;
-  while (appletMainLoop()) {
-    padUpdate(pad);
-    (void)padGetButtonsDown(pad);
-    if ((padGetButtons(pad) & kSyncMask) == 0) break;
-    consoleUpdate(NULL);
+static void wait_after_sync_switch(PadState* pad, bool* quit_app, bool can_reboot) {
+  if (can_reboot) {
+    printf("\nA: main menu   Y: reboot now   +: exit app\n");
+  } else {
+    printf("\nA: main menu   +: exit app\n");
   }
-
-  while (appletMainLoop()) {
-    padUpdate(pad);
-    const u64 down = padGetButtonsDown(pad);
-    if (down & HidNpadButton_A) return true;
-    if (down & HidNpadButton_B) return false;
-    consoleUpdate(NULL);
-  }
-  return false;
-}
-
-static void wait_after_sync_switch(PadState* pad, bool* quit_app) {
-  printf("\nA: main menu   +: exit app\n");
   while (appletMainLoop()) {
     padUpdate(pad);
     const u64 down = padGetButtonsDown(pad);
     if (down & HidNpadButton_A) return;
+    if (can_reboot && (down & HidNpadButton_Y)) {
+      printf("Rebooting...\n");
+      consoleUpdate(NULL);
+      Result rc = spsmInitialize();
+      if (R_SUCCEEDED(rc)) {
+        (void)spsmShutdown(true);
+        spsmExit();
+      }
+      *quit_app = true;
+      return;
+    }
     if (down & HidNpadButton_Plus) {
       *quit_app = true;
       return;
@@ -1285,6 +1823,7 @@ int main(int argc, char** argv) {
   Config cfg = load_config("sdmc:/switch/gba-sync/config.ini");
 
   std::vector<std::string> logs;
+  bool quit_app = false;
   if (R_FAILED(sock_rc)) {
     logs.push_back("ERROR: socket init failed");
   } else if (cfg.server_url.empty()) {
@@ -1292,47 +1831,64 @@ int main(int argc, char** argv) {
   } else if (cfg.server_url.rfind("http://", 0) != 0) {
     logs.push_back("ERROR: use http:// URL for Switch MVP");
   } else {
-    bool quit_app = false;
     while (appletMainLoop() && !quit_app) {
       consoleClear();
       printf("GBA Sync (Switch MVP)\n");
       printf("---------------------\n");
       printf("Server: %s\n", cfg.server_url.c_str());
-      printf("Save dir: %s\n\n", cfg.save_dir.c_str());
-      printf("A: full sync   X: upload only   Y: download only\n");
-      printf("-: Dropbox sync now\n\n");
-      printf("+ on this menu exits the app.\n\n");
+      printf("Save dir: %s\n", cfg.save_dir.c_str());
+      printf("\n");
+      sync_status_print_menu(cfg);
+      {
+        constexpr int kMenuLeftCol = 20;
+        printf("%-*s%s\n", kMenuLeftCol, "A: Auto sync", "R: save viewer");
+        printf("%-*s%s\n", kMenuLeftCol, "X: upload only", "-: Dropbox sync");
+        printf("%-*s%s\n", kMenuLeftCol, "Y: download only", "+: exit app");
+      }
+      printf("\n");
 
       SyncAction action = SyncAction::Auto;
-      if (!choose_action(&pad, &action)) break;
-
-      if (action == SyncAction::Auto && !confirm_auto_sync(&pad)) continue;
+      if (!choose_action(&pad, &action)) {
+        quit_app = true;
+        break;
+      }
 
       SyncManualFilter xy{};
       xy.all = true;
       std::vector<std::string> sync_logs;
       if (action == SyncAction::DropboxSync) {
+        printf("\nDropbox sync now...\n");
+        consoleUpdate(NULL);
         sync_logs = run_dropbox_sync_once(cfg);
+      } else if (action == SyncAction::SaveViewer) {
+        save_viewer_switch(&pad, cfg);
+        continue;
       } else if (action == SyncAction::UploadOnly) {
         if (!pick_upload_selection(&pad, cfg, &xy)) continue;
-        sync_logs = run_sync(cfg, action, &xy, &pad);
+        sync_logs = run_sync(cfg, action, &xy, &pad, nullptr);
       } else if (action == SyncAction::DownloadOnly) {
         if (!pick_download_selection(&pad, cfg, &xy)) continue;
-        sync_logs = run_sync(cfg, action, &xy, &pad);
+        sync_logs = run_sync(cfg, action, &xy, &pad, nullptr);
       } else {
-        sync_logs = run_sync(cfg, action, nullptr, &pad);
+        bool already_up_to_date = false;
+        sync_logs = run_sync(cfg, action, nullptr, &pad, &already_up_to_date);
+        for (const auto& line : sync_logs) printf("%s\n", line.c_str());
+        wait_after_sync_switch(&pad, &quit_app, already_up_to_date);
+        continue;
       }
       for (const auto& line : sync_logs) printf("%s\n", line.c_str());
-      wait_after_sync_switch(&pad, &quit_app);
+      wait_after_sync_switch(&pad, &quit_app, false);
     }
   }
   for (const auto& line : logs) printf("%s\n", line.c_str());
-  printf("\nPress + to exit.\n");
+  if (!quit_app) {
+    printf("\nPress + to exit.\n");
 
-  while (appletMainLoop()) {
-    padUpdate(&pad);
-    if (padGetButtonsDown(&pad) & HidNpadButton_Plus) break;
-    consoleUpdate(NULL);
+    while (appletMainLoop()) {
+      padUpdate(&pad);
+      if (padGetButtonsDown(&pad) & HidNpadButton_Plus) break;
+      consoleUpdate(NULL);
+    }
   }
 
   socketExit();

@@ -23,7 +23,29 @@ FastAPI backend for binary save storage and metadata coordination.
 - `DELETE /save/{game_id}` — remove index row and delete the stored blob (cleanup / bad test data)
 - `POST /resolve/{game_id}`
 
+## Admin web UI (optional)
+
+When `GBASYNC_ADMIN_PASSWORD` is set, open **`http://<host>:8080/admin`** (redirects to `/admin/ui/`). Log in with that password, or call `/admin/api/*` with **`X-API-Key`** (same as the main API) instead of a browser session. If the password env var is unset, admin routes return **404** (disabled).
+
+## Data directory (`save_data/`)
+
 `GET /saves` is driven by the **metadata index** (`INDEX_PATH`, e.g. `save_data/index.json`), not by re-scanning the save folder. Curl uploads register rows there; deleting local test files does **not** remove server metadata. Use `DELETE` or edit the index JSON if entries outlive the files.
+
+By default this repo stores server data under **`save_data/` at the repository root**:
+
+| Role | Env var | Default in `.env.example` (uvicorn cwd = `server/`) |
+|------|---------|-----------------------------------------------------|
+| Per-game `.sav` files | `SAVE_ROOT` | `../save_data/saves` |
+| Metadata index JSON | `INDEX_PATH` | `../save_data/index.json` |
+| Version history (optional) | `HISTORY_ROOT` | `../save_data/history` |
+
+**Where this is configured:** the **repo-root `.env`** (see `.env.example`). `server/app/main.py` reads those variables; it does not hardcode `save_data` — that name is only the conventional folder used in the template paths.
+
+**Local uvicorn:** run from the `server/` directory so `../save_data/...` resolves to the repo’s `save_data/` folder.
+
+**Docker:** `server/docker-compose.yml` mounts `../save_data` to `/data` in the container and sets `SAVE_ROOT`, `INDEX_PATH`, and `HISTORY_ROOT` to `/data/saves`, `/data/index.json`, and `/data/history`. To use a different host location, change the **left-hand side** of the volume mapping (e.g. bind mount a NAS path to `/data`) and keep the in-container paths and `environment:` block in sync — or point the three env vars at another layout you mount explicitly.
+
+**Changing location:** edit all three paths together (and migrate `saves/`, `index.json`, and `history/` if moving an existing install). Stop the server first and copy the data tree so blobs and index stay consistent.
 
 ## Run
 

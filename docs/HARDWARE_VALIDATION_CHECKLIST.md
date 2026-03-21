@@ -21,7 +21,7 @@ Use this checklist for real-device validation on Switch + 3DS + Delta.
 
 - [ ] Install `gbasync.nro` and config
 - [ ] Run app and confirm no config/network error
-- [ ] Full sync: confirm screen — **A** continues, **B** returns to menu (**+** should not cancel confirm)
+- [ ] Auto sync: preview — **A** continues, **B** returns to menu (**+** should not cancel preview)
 - [ ] After sync: **done** screen — **A** returns to menu, **+** exits app
 - [ ] Save in Switch-side emulator, then run upload-only sync (`X`)
 - [ ] Confirm server metadata hash/platform_source updates

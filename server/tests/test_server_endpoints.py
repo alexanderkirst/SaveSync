@@ -25,6 +25,28 @@ def _auth_headers() -> dict[str, str]:
     return {"X-API-Key": key} if key else {}
 
 
+def test_root_lists_entrypoints(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    r = client.get("/")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["service"] == "GBAsync"
+    assert body["health"] == "/health"
+    assert "/admin" in body.get("admin_ui", "")
+
+
+def test_root_redirects_browser_to_admin_ui(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    r = client.get(
+        "/",
+        headers={"Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    loc = r.headers.get("location") or ""
+    assert loc.endswith("/admin/ui/")
+
+
 def test_put_get_roundtrip(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
     data = b"abcd"
@@ -167,3 +189,22 @@ def test_rom_sha1_routes_legacy_alias_to_canonical(tmp_path: Path) -> None:
     assert listed.status_code == 200
     ids = [item["game_id"] for item in listed.json()["saves"]]
     assert ids == ["pokemon-emer-bpee"]
+
+
+def test_admin_dashboard_404_when_disabled(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GBASYNC_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("SAVESYNC_ADMIN_PASSWORD", raising=False)
+    client = _make_client(tmp_path)
+    assert client.get("/admin/api/dashboard").status_code == 404
+
+
+def test_admin_dashboard_auth(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GBASYNC_ADMIN_PASSWORD", "admin-test-pw")
+    monkeypatch.setenv("API_KEY", "test-api-key-123")
+    client = _make_client(tmp_path)
+    assert client.get("/admin/api/dashboard").status_code == 401
+    r = client.get("/admin/api/dashboard", headers={"X-API-Key": "test-api-key-123"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "save_count" in body
+    assert body["index_path"]
