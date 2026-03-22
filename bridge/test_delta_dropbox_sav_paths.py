@@ -50,7 +50,10 @@ def test_apply_bytes_to_delta_does_not_create_case_only_duplicate_blob(tmp_path:
     apply_bytes_to_delta(tmp_path, identifier, new, backup_dir=None)
 
     assert canonical_blob.read_bytes() == new
-    assert not lowercase_blob.exists()
+    # On case-insensitive volumes (default macOS), Harmony spellings may alias one inode;
+    # then lowercase_blob.exists() is True even though we only created canonical_blob.
+    if lowercase_blob.exists():
+        assert canonical_blob.samefile(lowercase_blob)
 
     updated = json.loads(meta_path.read_text(encoding="utf-8"))
     f0 = updated["files"][0]
@@ -58,3 +61,32 @@ def test_apply_bytes_to_delta_does_not_create_case_only_duplicate_blob(tmp_path:
     assert f0["sha1Hash"] == hashlib.sha1(new).hexdigest()
     assert updated["record"]["sha1"] == hashlib.sha1(new).hexdigest()
     assert f0["versionIdentifier"] == "old-version"
+
+
+def test_apply_bytes_to_delta_trims_mgba_16_byte_footer_for_128k_slot(tmp_path: Path) -> None:
+    """mGBA often sends 131088 B; Delta Harmony expects 131072 B — keep first 128 KiB only."""
+    identifier = "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc"
+    canonical_blob = tmp_path / f"GameSave-{identifier}-gameSave"
+    meta_path = tmp_path / f"GameSave-{identifier}"
+
+    old = b"A" * 131072
+    canonical_blob.write_bytes(old)
+    meta_path.write_text(
+        json.dumps(
+            _meta_for(
+                identifier=identifier,
+                remote_identifier=f"/delta emulator/{canonical_blob.name}",
+                size=131072,
+                sha1_hex=hashlib.sha1(old).hexdigest(),
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    padded = old + b"\x00" * 16
+    assert len(padded) == 131088
+    apply_bytes_to_delta(tmp_path, identifier, padded, backup_dir=None)
+
+    assert canonical_blob.read_bytes() == old
+    updated = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert updated["files"][0]["sha1Hash"] == hashlib.sha1(old).hexdigest()

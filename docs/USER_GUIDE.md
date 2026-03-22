@@ -23,7 +23,7 @@ Saves and the metadata index are stored on the host under **`save_data/`** at th
 
 List or restore with **`GET /save/{game_id}/history`** and **`POST /save/{game_id}/restore`**, from the **admin** UI (**History** on a row), or from the **homebrew save viewer** (**A** = history / restore). On **Switch** and **3DS** history screens, **R** toggles **keep** (pinned) for the highlighted revision (`PATCH /save/{game_id}/history/revision/keep`); pinned rows show **`[KEEP]`**. Restoring changes the **server** copy only; run **download** (or Auto) on each device afterward so local `.sav` files match, or the next upload may overwrite the restored server file.
 
-**Revision labels:** Optional per-backup names are stored in **`save_data/history/{game_id}/labels.json`**. Set from admin (**Rev label** in the history sheet) or **`PATCH /save/{game_id}/history/revision`** with `filename` + `display_name`. Listed in **`GET /save/{game_id}/history`** as **`display_name`** on each entry (separate from the main save’s display name).
+**Revision labels:** Optional per-backup names are stored in **`save_data/history/{game_id}/labels.json`**. Set from admin (**label save** in the history sheet) or **`PATCH /save/{game_id}/history/revision`** with `filename` + `display_name`. Listed in **`GET /save/{game_id}/history`** as **`display_name`** on each entry (separate from the main save’s display name).
 
 **Display names:** Optional **`display_name`** in the index (set in admin with **Display name**, or **`PATCH /save/{game_id}/meta`**). Returned in **`GET /saves`**. On **Switch** and **3DS** **save viewer** (main menu **R**), the primary line shows **`display_name`** when set, and falls back to **`game_id`** — it does **not** change the canonical **`game_id`** or routing.
 
@@ -150,6 +150,8 @@ GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS=3600
 ```
 
 `delta_dropbox_api_sync.py` also aligns `GameSave` `versionIdentifier` to the blob's Dropbox revision and uploads blobs before sidecars, which keeps Delta attachment metadata consistent.
+
+**Save size (mGBA vs Delta):** mGBA on Switch/3DS often produces **131088**-byte GBA flash saves (128 KiB plus a 16-byte footer). Delta’s Harmony slot for the same game is usually **131072** bytes. When the bridge writes **from the GBAsync server into Delta’s Dropbox files**, it **trims those 16 bytes** only in that step so the blob matches Delta’s `files[0].size`. Your server copy is unchanged; see **`bridge/DELTA_DROPBOX_FORMAT.md`** for detail.
 
 ## 3) Install Switch client
 

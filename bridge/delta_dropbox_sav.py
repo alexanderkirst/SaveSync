@@ -396,7 +396,19 @@ def apply_bytes_to_delta(
 
     data = new_data
     if len(data) > expected:
-        raise ValueError(f"data {len(data)} bytes > Delta expected {expected}")
+        # mGBA (and some other emulators) write 131088 bytes for many GBA flash games: 128 KiB
+        # cartridge save + 16-byte footer (RTC / flash metadata). Delta's Harmony sidecar
+        # `files[0].size` is the on-device 128 KiB blob. Trimming the tail matches what
+        # Delta stores; the 16 bytes are not part of that canonical image.
+        if len(data) == expected + 16 and expected == 131072:
+            print(
+                f"[delta-apply] trim {len(data)} -> {expected} bytes "
+                f"(emulator +16 B footer vs Delta 128 KiB slot) id={identifier[:8]}…",
+                flush=True,
+            )
+            data = data[:-16]
+        else:
+            raise ValueError(f"data {len(data)} bytes > Delta expected {expected}")
     if len(data) < expected:
         data = data + b"\xff" * (expected - len(data))
 

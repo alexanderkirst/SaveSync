@@ -245,7 +245,7 @@ async function openHistoryModal(gameId) {
     };
     actions.appendChild(bKeep);
     const bLabel = document.createElement("button");
-    bLabel.textContent = "Rev label";
+    bLabel.textContent = "label save";
     bLabel.type = "button";
     bLabel.title = "Label for this history file only (stored in labels.json)";
     bLabel.onclick = async () => {

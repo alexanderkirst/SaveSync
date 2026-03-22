@@ -64,7 +64,7 @@ These features shipped in the same release cycle as the v0.1.6 console work (cur
 
 ### Admin web UI
 
-- **Display name** — main save label in the index (vs **Rev label** for a single history revision).
+- **Display name** — main save label in the index (vs **label save** for a single history revision).
 - **History** sheet per save: list revisions, **Keep** toggle, restore — see **`admin-web/README.md`**.
 - Admin routes mirror the public API for history keep and revision labels where applicable.
 

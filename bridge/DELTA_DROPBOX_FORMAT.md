@@ -39,6 +39,8 @@ Harmony compares the **Dropbox copy** of each `GameSave-*` JSON + `*-gameSave` b
 
 GBAsync’s `apply_bytes_to_delta` rewrites `remoteIdentifier` so its basename matches the primary blob being updated (keeping a leading folder prefix if present) and materializes that path if it was missing locally—so the attachment Delta downloads matches `sha1Hash`. In Dropbox API mode, `delta_dropbox_api_sync.py` then aligns sidecar `versionIdentifier` to the uploaded blob's Dropbox `rev`.
 
+**mGBA / 128 KiB + 16 bytes:** Some emulators (notably mGBA) write **131088** bytes for GBA flash saves (**128 KiB + 16**-byte footer). Delta’s Harmony `files[0].size` for those titles is usually **131072**. When pushing server bytes into Delta, `apply_bytes_to_delta` **trims the last 16 bytes** only when `len(data) == 131088` and `expected == 131072`, logs `[delta-apply] trim …`, then writes the **128 KiB** image Delta expects. The GBAsync server still stores whatever clients upload (131088 or 131072); trimming applies only at the **Delta write** boundary.
+
 **Timestamp tug-of-war:** `server_delta` merge picks the newer of GBAsync’s `server_updated_at` and Delta’s `record.modifiedDate`. Resolving conflicts in Delta often **bumps** `modifiedDate` to “now”, so Dropbox can look **newer** than a fresh 3DS upload and the bridge will skip pushing server bytes to Dropbox—or even PUT Delta back onto the server.
 
 For two-way mode (`SAVESYNC_SERVER_DELTA_ONE_WAY=false`), use guardrails:
