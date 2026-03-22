@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#000000" />
   <meta name="color-scheme" content="dark" />
   <title>GBAsync Admin</title>
-  <link rel="stylesheet" href="styles.css?v=3" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <header class="top">
@@ -75,15 +75,22 @@
     </section>
 
     <section id="tab-saves" class="tab-pane hidden">
-      <h2>Saves</h2>
-      <p class="hint">Filter by <code>game_id</code> or display name. <strong>Modified</strong> is the client-reported file time; <strong>Server upload</strong> is when the server last stored this revision. Restoring replaces the server’s current file (the old one is kept in history). After a restore, run <strong>download</strong> on each device.</p>
-      <div class="filter-row">
-        <label for="saves-filter">Search</label>
-        <input type="text" id="saves-filter" placeholder="Filter saves…" autocomplete="off" enterkeyhint="search" />
+      <h2 class="tab-saves-heading">Saves</h2>
+      <p class="hint hint--saves">
+        Search by <code>game_id</code> or display name.<br />
+        <strong>Modified</strong> = client file time · <strong>Server upload</strong> = last stored revision.<br />
+        Desktop: drag table rows (clear search), then <strong>Save row order</strong> — same order on devices.
+      </p>
+      <div class="filter-row filter-row--saves">
+        <div class="filter-saves-search">
+          <label for="saves-filter">Search</label>
+          <input type="text" id="saves-filter" placeholder="Filter by id or name…" autocomplete="off" enterkeyhint="search" />
+        </div>
+        <button type="button" id="btn-save-order" class="btn-primary btn-save-order">Save row order</button>
       </div>
       <div id="saves-cards" class="saves-cards" aria-label="Saves (mobile layout)"></div>
       <div class="table-wrap saves-table-desktop"><table id="tbl-saves"><thead><tr>
-        <th>game_id</th><th>display name</th><th>sha256</th><th>size</th><th>conflict</th><th>modified</th><th>server upload</th><th>actions</th>
+        <th class="drag-col" aria-label="Reorder"></th><th>display name</th><th>game_id</th><th>sha256</th><th>size</th><th>conflict</th><th>modified</th><th>server upload</th><th>actions</th>
       </tr></thead><tbody></tbody></table></div>
     </section>
 
@@ -181,6 +188,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

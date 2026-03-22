@@ -5,7 +5,7 @@ import json
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -66,6 +66,7 @@ class _IndexState:
     aliases: dict[str, str]
     rom_sha1: dict[str, str]
     tombstones: dict[str, str]
+    save_order: list[str] = field(default_factory=list)
 
 
 class SaveStore:
@@ -126,6 +127,10 @@ class SaveStore:
             if not isinstance(data, dict):
                 return _IndexState(saves={}, aliases={}, rom_sha1={}, tombstones={})
             if isinstance(data.get("saves"), dict):
+                save_order: list[str] = []
+                so = data.get("save_order")
+                if isinstance(so, list):
+                    save_order = [str(x).strip() for x in so if isinstance(x, str) and str(x).strip()]
                 return _IndexState(
                     saves={str(k): v for k, v in data["saves"].items() if isinstance(v, dict)},
                     aliases={
@@ -143,6 +148,7 @@ class SaveStore:
                         for k, v in (data.get("tombstones") or {}).items()
                         if str(k).strip() and str(v).strip()
                     },
+                    save_order=save_order,
                 )
             # Legacy format: top-level {game_id: meta}
             legacy = {str(k): v for k, v in data.items() if isinstance(v, dict)}
@@ -162,13 +168,16 @@ class SaveStore:
     def _write_index_state(self, state: _IndexState) -> None:
         tmp = self.index_path.with_suffix(".tmp")
         payload: dict[str, object]
-        if state.aliases or state.rom_sha1 or state.tombstones:
+        use_nested = bool(state.aliases or state.rom_sha1 or state.tombstones or state.save_order)
+        if use_nested:
             payload = {
                 "saves": state.saves,
                 "aliases": state.aliases,
                 "rom_sha1": state.rom_sha1,
                 "tombstones": state.tombstones,
             }
+            if state.save_order:
+                payload["save_order"] = state.save_order
         else:
             payload = state.saves
         with tmp.open("w", encoding="utf-8") as fh:
@@ -294,6 +303,7 @@ class SaveStore:
                     if target == loser:
                         state.rom_sha1[rsha] = winner
                 del state.saves[loser]
+                state.save_order = [x for x in state.save_order if x != loser]
                 loser_path = self.save_path(loser)
                 winner_path = self.save_path(winner)
                 if loser_path.is_file() and not winner_path.is_file():
@@ -314,6 +324,18 @@ class SaveStore:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    @staticmethod
+    def _ordered_list_items(state: _IndexState, items: list[SaveListItem]) -> list[SaveListItem]:
+        """Apply ``save_order`` from the index; unknown ids sort after, by ``game_id``."""
+        id_set = {it.game_id for it in items}
+        order = [x for x in state.save_order if x in id_set]
+        seen = set(order)
+        missing = sorted(id_set - seen)
+        full = order + missing
+        pos = {g: i for i, g in enumerate(full)}
+        items.sort(key=lambda it: (pos[it.game_id], it.game_id))
+        return items
+
     def list_saves(self) -> list[SaveListItem]:
         with self._lock:
             state = self._read_index_state()
@@ -324,8 +346,22 @@ class SaveStore:
             if not self.save_path(game_id).is_file():
                 continue
             out.append(SaveListItem(game_id=game_id, **raw))
-        out.sort(key=lambda item: item.game_id)
-        return out
+        out = self._ordered_list_items(state, out)
+        return [item.model_copy(update={"list_order": i}) for i, item in enumerate(out)]
+
+    def set_save_order(self, game_ids: list[str]) -> None:
+        """Persist display order for ``GET /saves`` (must list every game_id that has a blob, exactly once)."""
+        with self._lock:
+            state = self._read_index_state()
+            listed = [gid for gid in state.saves if self.save_path(gid).is_file()]
+            if not listed:
+                if game_ids:
+                    raise ValueError("no saves to order")
+                return
+            if sorted(game_ids) != sorted(listed):
+                raise ValueError("game_ids must be a permutation of current saves on disk")
+            state.save_order = list(game_ids)
+            self._write_index_state(state)
 
     def list_conflicts(self) -> list[SaveListItem]:
         return [item for item in self.list_saves() if item.conflict]
@@ -707,6 +743,8 @@ class SaveStore:
             if existing_raw and existing_raw.get("display_name"):
                 incoming_dict["display_name"] = existing_raw["display_name"]
             state.saves[canonical] = incoming_dict
+            if canonical not in state.save_order:
+                state.save_order.append(canonical)
             self._register_identity_maps(
                 state,
                 canonical=canonical,
@@ -740,6 +778,7 @@ class SaveStore:
             if canonical not in state.saves:
                 return False
             del state.saves[canonical]
+            state.save_order = [x for x in state.save_order if x != canonical]
             state.aliases = {k: v for k, v in state.aliases.items() if v != canonical}
             state.rom_sha1 = {k: v for k, v in state.rom_sha1.items() if v != canonical}
             state.tombstones = {k: v for k, v in state.tombstones.items() if v != canonical}

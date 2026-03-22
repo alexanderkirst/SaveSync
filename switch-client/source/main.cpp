@@ -17,6 +17,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <netdb.h>
 #include <sstream>
 #include <string>
@@ -69,6 +70,8 @@ struct SaveMeta {
   size_t size_bytes = 0;
   std::string filename_hint;
   std::string display_name;
+  /** From GET /saves JSON array order (0 = first). */
+  int list_order = 0;
 };
 
 struct LocalSave {
@@ -428,9 +431,32 @@ static bool should_skip_remote_for_nds_policy(const Config& cfg, const SaveMeta&
 static std::vector<std::string> build_merge_ids_filtered(
     const Config& cfg,
     const std::map<std::string, LocalSave>& local_by_id,
-    const std::map<std::string, SaveMeta>& remote) {
+    const std::map<std::string, SaveMeta>& remote,
+    const std::vector<std::string>* remote_order) {
   std::vector<std::string> merge_ids;
+  std::set<std::string> seen;
   merge_ids.reserve(local_by_id.size() + remote.size());
+
+  if (remote_order && !remote_order->empty()) {
+    for (const auto& id : *remote_order) {
+      if (is_skipped_merge_id(cfg, id)) continue;
+      const auto it = remote.find(id);
+      if (it == remote.end()) continue;
+      if (should_skip_remote_for_nds_policy(cfg, it->second)) continue;
+      merge_ids.push_back(id);
+      seen.insert(id);
+    }
+    std::vector<std::string> rest;
+    for (const auto& [id, _] : local_by_id) {
+      if (is_skipped_merge_id(cfg, id)) continue;
+      if (seen.count(id)) continue;
+      rest.push_back(id);
+    }
+    std::sort(rest.begin(), rest.end());
+    merge_ids.insert(merge_ids.end(), rest.begin(), rest.end());
+    return merge_ids;
+  }
+
   for (const auto& [id, _] : local_by_id) {
     if (!is_skipped_merge_id(cfg, id)) merge_ids.push_back(id);
   }
@@ -876,9 +902,17 @@ static bool http_request(
   return true;
 }
 
-static std::map<std::string, SaveMeta> parse_saves_json(const std::string& json) {
-  std::map<std::string, SaveMeta> out;
+struct SavesParseResult {
+  std::map<std::string, SaveMeta> by_id;
+  /** GET /saves array order (first occurrence of each game_id). */
+  std::vector<std::string> order;
+};
+
+static SavesParseResult parse_saves_json(const std::string& json) {
+  SavesParseResult result;
+  std::unordered_set<std::string> seen_in_order;
   size_t pos = 0;
+  int ordinal = 0;
   while (true) {
     const auto gid = json.find("\"game_id\":\"", pos);
     if (gid == std::string::npos) break;
@@ -929,10 +963,25 @@ static std::map<std::string, SaveMeta> parse_saves_json(const std::string& json)
       while (j < chunk.size() && std::isdigit(static_cast<unsigned char>(chunk[j]))) j++;
       if (j > i) meta.size_bytes = static_cast<size_t>(std::strtoull(chunk.substr(i, j - i).c_str(), nullptr, 10));
     }
-    out[meta.game_id] = meta;
+    const auto lo = chunk.find("\"list_order\":");
+    if (lo != std::string::npos) {
+      size_t i = lo + 13;
+      while (i < chunk.size() && (chunk[i] == ' ' || chunk[i] == '\t')) i++;
+      char* endp = nullptr;
+      const char* base = chunk.c_str();
+      long v = std::strtol(base + static_cast<std::ptrdiff_t>(i), &endp, 10);
+      if (endp != base + static_cast<std::ptrdiff_t>(i)) meta.list_order = static_cast<int>(v);
+    } else {
+      meta.list_order = ordinal;
+    }
+    ordinal++;
+    result.by_id[meta.game_id] = meta;
+    if (seen_in_order.insert(meta.game_id).second) {
+      result.order.push_back(meta.game_id);
+    }
     pos = win_end;
   }
-  return out;
+  return result;
 }
 
 struct HistoryEntryParsed {
@@ -2077,6 +2126,30 @@ static bool pick_upload_selection(PadState* pad, const Config& cfg, SyncManualFi
     printf("No local .sav files to upload.\n");
     return false;
   }
+  /** Server index: display names + list order for this picker. */
+  SavesParseResult server_pr;
+  {
+    int st = 0;
+    std::vector<unsigned char> body;
+    if (http_request(cfg, "GET", "/saves", {}, st, body) && st == 200) {
+      server_pr = parse_saves_json(std::string(body.begin(), body.end()));
+    }
+  }
+  const auto& server_meta = server_pr.by_id;
+  if (!server_pr.order.empty()) {
+    std::unordered_map<std::string, size_t> pos;
+    for (size_t i = 0; i < server_pr.order.size(); ++i) pos[server_pr.order[i]] = i;
+    std::sort(locals.begin(), locals.end(), [&](const LocalSave& a, const LocalSave& b) {
+      const auto pa = pos.find(a.game_id);
+      const auto pb = pos.find(b.game_id);
+      const bool ha = pa != pos.end();
+      const bool hb = pb != pos.end();
+      if (ha && !hb) return true;
+      if (!ha && hb) return false;
+      if (ha && hb) return pa->second < pb->second;
+      return a.game_id < b.game_id;
+    });
+  }
   const int n = static_cast<int>(locals.size());
   std::vector<bool> picked(static_cast<size_t>(n), true);
   bool master_all = true;
@@ -2148,11 +2221,18 @@ static bool pick_upload_selection(PadState* pad, const Config& cfg, SyncManualFi
         printf("%c [%c] ALL SAVES\n", mark, master_all ? 'x' : ' ');
       } else {
         const LocalSave& L = locals[static_cast<size_t>(row - 1)];
+        const char* disp = L.game_id.c_str();
+        std::string disp_buf;
+        const auto sit = server_meta.find(L.game_id);
+        if (sit != server_meta.end() && !sit->second.display_name.empty()) {
+          disp_buf = sit->second.display_name;
+          disp = disp_buf.c_str();
+        }
         printf(
             "%c [%c] %.28s\n",
             mark,
             picked[static_cast<size_t>(row - 1)] ? 'x' : ' ',
-            L.game_id.c_str());
+            disp);
       }
     }
     dirty = false;
@@ -2169,14 +2249,24 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
     return false;
   }
   std::string json(body.begin(), body.end());
-  auto remote = parse_saves_json(json);
-  if (remote.empty()) {
+  const SavesParseResult pr = parse_saves_json(json);
+  if (pr.by_id.empty()) {
     printf("No remote saves to download.\n");
     return false;
   }
   std::vector<std::pair<std::string, SaveMeta>> rows;
-  rows.reserve(remote.size());
-  for (const auto& kv : remote) {
+  rows.reserve(pr.by_id.size());
+  std::set<std::string> added;
+  for (const auto& id : pr.order) {
+    const auto it = pr.by_id.find(id);
+    if (it == pr.by_id.end()) continue;
+    if (is_skipped_merge_id(cfg, id)) continue;
+    if (should_skip_remote_for_nds_policy(cfg, it->second)) continue;
+    rows.push_back({it->first, it->second});
+    added.insert(id);
+  }
+  for (const auto& kv : pr.by_id) {
+    if (added.count(kv.first)) continue;
     if (is_skipped_merge_id(cfg, kv.first)) continue;
     if (should_skip_remote_for_nds_policy(cfg, kv.second)) continue;
     rows.push_back(kv);
@@ -2185,7 +2275,6 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
     printf("No remote saves to download (all filtered).\n");
     return false;
   }
-  std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
   const int n = static_cast<int>(rows.size());
   std::vector<bool> picked(static_cast<size_t>(n), true);
@@ -2258,11 +2347,17 @@ static bool pick_download_selection(PadState* pad, const Config& cfg, SyncManual
         printf("%c [%c] ALL SAVES\n", mark, master_all ? 'x' : ' ');
       } else {
         const SaveMeta& R = rows[static_cast<size_t>(row - 1)].second;
+        const char* disp = R.game_id.c_str();
+        std::string disp_buf;
+        if (!R.display_name.empty()) {
+          disp_buf = R.display_name;
+          disp = disp_buf.c_str();
+        }
         printf(
             "%c [%c] %.28s\n",
             mark,
             picked[static_cast<size_t>(row - 1)] ? 'x' : ' ',
-            R.game_id.c_str());
+            disp);
       }
     }
     dirty = false;
@@ -2291,8 +2386,9 @@ static void save_viewer_switch(PadState* pad, Config& cfg) {
     return;
   }
   std::string json(body.begin(), body.end());
-  auto remote = parse_saves_json(json);
-  std::vector<std::string> merge_ids = build_merge_ids_filtered(cfg, local_by_id, remote);
+  const SavesParseResult pr = parse_saves_json(json);
+  const auto& remote = pr.by_id;
+  std::vector<std::string> merge_ids = build_merge_ids_filtered(cfg, local_by_id, remote, &pr.order);
   if (merge_ids.empty()) {
     consoleClear();
     printf("Save viewer: no saves (local or server).\n");
@@ -2416,7 +2512,8 @@ static std::vector<std::string> run_sync(
     return logs;
   }
   std::string json(body.begin(), body.end());
-  auto remote = parse_saves_json(json);
+  const SavesParseResult pr = parse_saves_json(json);
+  const auto& remote = pr.by_id;
   if (action != SyncAction::Auto) {
     logs.push_back("Remote saves: " + std::to_string(remote.size()));
   }
@@ -2437,7 +2534,18 @@ static std::vector<std::string> run_sync(
   }
 
   if (action == SyncAction::DownloadOnly) {
+    std::set<std::string> dl_seen;
+    for (const auto& id : pr.order) {
+      const auto it = remote.find(id);
+      if (it == remote.end()) continue;
+      if (is_skipped_merge_id(cfg, id)) continue;
+      if (should_skip_remote_for_nds_policy(cfg, it->second)) continue;
+      if (xy_filter && !xy_filter->all && !xy_filter->ids.count(id)) continue;
+      if (get_save_log(cfg, id, it->second, logs, local)) baseline_upsert(baseline, id, it->second.sha256);
+      dl_seen.insert(id);
+    }
     for (const auto& [id, r] : remote) {
+      if (dl_seen.count(id)) continue;
       if (is_skipped_merge_id(cfg, id)) continue;
       if (should_skip_remote_for_nds_policy(cfg, r)) continue;
       if (xy_filter && !xy_filter->all && !xy_filter->ids.count(id)) continue;
@@ -2450,7 +2558,7 @@ static std::vector<std::string> run_sync(
 
   /* Auto: hash + .gbasync-baseline (legacy .savesync-baseline still read). */
   debug_report_sync_start_switch(cfg, local);
-  std::vector<std::string> merge_ids = build_merge_ids_filtered(cfg, local_by_id, remote);
+  std::vector<std::string> merge_ids = build_merge_ids_filtered(cfg, local_by_id, remote, &pr.order);
 
   std::vector<AutoPlanRow> plan;
   build_auto_plan_vector(cfg, merge_ids, local_by_id, remote, baseline, plan);

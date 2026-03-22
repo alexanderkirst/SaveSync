@@ -294,6 +294,12 @@ def load_api_config(path: Path) -> tuple[TripleConfig, str]:
         ow = ow.strip().lower() in ("1", "true", "yes")
     else:
         ow = bool(ow)
+    min_win = int(raw.get("server_delta_min_delta_win_seconds", 0) or 0)
+    if min_win < 0:
+        min_win = 0
+    recent_protect = int(raw.get("server_delta_recent_server_protect_seconds", 0) or 0)
+    if recent_protect < 0:
+        recent_protect = 0
     placeholder = TripleConfig(
         server_url=raw["server_url"].rstrip("/"),
         api_key=raw.get("api_key", ""),
@@ -308,6 +314,8 @@ def load_api_config(path: Path) -> tuple[TripleConfig, str]:
         backup_dir=Path(raw["backup_dir"]).expanduser() if raw.get("backup_dir") else None,
         sync_mode=mode,
         server_delta_one_way=ow,
+        server_delta_min_delta_win_seconds=min_win,
+        server_delta_recent_server_protect_seconds=recent_protect,
     )
     return placeholder, remote
 

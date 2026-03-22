@@ -24,6 +24,7 @@ from .models import (
     RestoreRequest,
     RevisionKeepPatch,
     RevisionLabelPatch,
+    SaveOrderPut,
 )
 
 _log = logging.getLogger("gbasync.admin")
@@ -294,6 +295,17 @@ def admin_patch_history_keep(_: AdminDep, request: Request, game_id: str, body: 
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="save or history file not found")
     _log.info("admin set_history_revision_keep game_id=%s filename=%s keep=%s", game_id, body.filename, body.keep)
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
+@router.put("/api/save-order")
+def admin_put_save_order(_: AdminDep, request: Request, body: SaveOrderPut) -> JSONResponse:
+    store = _get_store(request)
+    try:
+        store.set_save_order(body.game_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    _log.info("admin set_save_order count=%s", len(body.game_ids))
     return JSONResponse(status_code=200, content={"ok": True})
 
 

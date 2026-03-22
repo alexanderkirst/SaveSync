@@ -88,32 +88,43 @@ function attachSaveRowActions(wrap, s) {
   bCopy.onclick = () => {
     navigator.clipboard.writeText(shaFull).then(() => setGlobal("SHA copied.", false)).catch(() => setGlobal("Copy failed", true));
   };
-  wrap.appendChild(bCopy);
   const bDl = document.createElement("button");
   bDl.textContent = "Download";
   bDl.type = "button";
   bDl.onclick = () => downloadSave(s.game_id);
-  wrap.appendChild(bDl);
   const bHist = document.createElement("button");
   bHist.textContent = "History";
   bHist.type = "button";
   bHist.onclick = () => openHistoryModal(s.game_id);
-  wrap.appendChild(bHist);
   const bName = document.createElement("button");
   bName.textContent = "Display name";
   bName.type = "button";
   bName.title = "Name for the current save on the server (index only; not a history backup)";
   bName.onclick = () => editDisplayName(s.game_id, s.display_name || "");
-  wrap.appendChild(bName);
+  let bResolve = null;
   if (s.conflict) {
-    const b = document.createElement("button");
-    b.textContent = "Resolve";
-    b.type = "button";
-    b.onclick = () => {
+    bResolve = document.createElement("button");
+    bResolve.textContent = "Resolve";
+    bResolve.type = "button";
+    bResolve.onclick = () => {
       document.getElementById("resolve-id").value = s.game_id;
       switchTab("actions");
     };
-    wrap.appendChild(b);
+  }
+
+  /* 2×2 grid (table + cards): col1 Download/History, col2 Display name / Copy SHA */
+  const grid = document.createElement("div");
+  grid.className = "save-actions-grid";
+  grid.appendChild(bDl);
+  grid.appendChild(bHist);
+  grid.appendChild(bName);
+  grid.appendChild(bCopy);
+  wrap.appendChild(grid);
+  if (bResolve) {
+    const row = document.createElement("div");
+    row.className = "save-actions-resolve";
+    row.appendChild(bResolve);
+    wrap.appendChild(row);
   }
 }
 
@@ -131,10 +142,14 @@ function renderSavesCards(list) {
     body.className = "save-card-body";
     const shaFull = s.sha256 || "";
     const shaShort = shaFull.slice(0, 12) + "…";
+    const dn = (s.display_name || "").trim();
+    const gid = s.game_id || "";
+    const cardTitle = dn || gid || "—";
+    const showGameIdLine = Boolean(dn && gid);
     body.innerHTML = `
-      <h3 class="save-card-title">${escapeHtml(s.game_id)}</h3>
+      <h3 class="save-card-title">${escapeHtml(cardTitle)}</h3>
+      ${showGameIdLine ? `<p class="save-card-gameid"><span class="save-card-gameid-label">game_id</span><span class="save-card-gameid-value mono">${escapeHtml(gid)}</span></p>` : ""}
       <dl class="save-card-dl">
-        <div><dt>Display name</dt><dd>${escapeHtml(s.display_name || "—")}</dd></div>
         <div><dt>SHA256</dt><dd class="mono" title="${escapeHtml(shaFull)}">${escapeHtml(shaShort)}</dd></div>
         <div><dt>Size</dt><dd>${escapeHtml(String(s.size_bytes ?? ""))}</dd></div>
         <div><dt>Conflict</dt><dd>${s.conflict ? "yes" : "—"}</dd></div>
@@ -157,16 +172,54 @@ function renderSavesTable() {
     const dn = (s.display_name || "").toLowerCase();
     return id.includes(q) || dn.includes(q);
   });
+  list.sort((a, b) => (a.list_order ?? 0) - (b.list_order ?? 0));
   renderSavesCards(list);
   for (const s of list) {
     const tr = document.createElement("tr");
+    tr.dataset.gameId = s.game_id || "";
+    tr.draggable = !q;
     const shaFull = s.sha256 || "";
     const shaShort = shaFull.slice(0, 12) + "…";
-    tr.innerHTML = `<td>${escapeHtml(s.game_id)}</td><td>${escapeHtml(s.display_name || "")}</td><td title="${escapeHtml(shaFull)}" class="mono"><code>${escapeHtml(shaShort)}</code></td><td>${s.size_bytes ?? ""}</td><td>${s.conflict ? "yes" : ""}</td><td title="${escapeHtml(s.last_modified_utc || "")}">${escapeHtml(formatAdminTime(s.last_modified_utc))}</td><td title="${escapeHtml(s.server_updated_at || "")}">${escapeHtml(formatAdminTime(s.server_updated_at)) || "—"}</td><td class="row-actions"></td>`;
+    const dragHint = q ? "" : "Drag to reorder";
+    const dragMark = q ? "" : "⋮";
+    tr.innerHTML = `<td class="drag-cell" title="${dragHint}">${dragMark}</td><td>${escapeHtml(s.display_name || "")}</td><td class="mono">${escapeHtml(s.game_id)}</td><td title="${escapeHtml(shaFull)}" class="mono"><code>${escapeHtml(shaShort)}</code></td><td>${s.size_bytes ?? ""}</td><td>${s.conflict ? "yes" : ""}</td><td title="${escapeHtml(s.last_modified_utc || "")}">${escapeHtml(formatAdminTime(s.last_modified_utc))}</td><td title="${escapeHtml(s.server_updated_at || "")}">${escapeHtml(formatAdminTime(s.server_updated_at)) || "—"}</td><td class="row-actions row-actions-saves"></td>`;
     const wrap = tr.querySelector(".row-actions");
     attachSaveRowActions(wrap, s);
     tb.appendChild(tr);
   }
+}
+
+function wireSavesTableDnD() {
+  const tb = document.querySelector("#tbl-saves tbody");
+  if (!tb || tb.dataset.dndWired) return;
+  tb.dataset.dndWired = "1";
+  let dragRow = null;
+  tb.addEventListener("dragstart", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr || !tr.draggable) return;
+    dragRow = tr;
+    e.dataTransfer.effectAllowed = "move";
+    try {
+      e.dataTransfer.setData("text/plain", tr.dataset.gameId || "");
+    } catch (_) {}
+  });
+  tb.addEventListener("dragend", () => {
+    dragRow = null;
+  });
+  tb.addEventListener("dragover", (e) => {
+    if (!dragRow) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  });
+  tb.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const tr = e.target.closest("tr");
+    if (!tr || !dragRow || tr === dragRow) return;
+    const rect = tr.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    if (before) tb.insertBefore(dragRow, tr);
+    else tb.insertBefore(dragRow, tr.nextSibling);
+  });
 }
 
 async function downloadSave(id) {
@@ -245,7 +298,7 @@ async function openHistoryModal(gameId) {
     };
     actions.appendChild(bKeep);
     const bLabel = document.createElement("button");
-    bLabel.textContent = "label save";
+    bLabel.textContent = "Assign Label";
     bLabel.type = "button";
     bLabel.title = "Label for this history file only (stored in labels.json)";
     bLabel.onclick = async () => {
@@ -386,6 +439,7 @@ async function loadAll() {
   const saves = await api("/saves");
   _savesCache = saves.saves || [];
   renderSavesTable();
+  wireSavesTableDnD();
 
   const conf = await api("/conflicts");
   const tbC = document.querySelector("#tbl-conflicts tbody");
@@ -517,6 +571,24 @@ document.getElementById("btn-delete").addEventListener("click", async () => {
 });
 
 document.getElementById("saves-filter")?.addEventListener("input", () => renderSavesTable());
+
+document.getElementById("btn-save-order")?.addEventListener("click", async () => {
+  const q = (document.getElementById("saves-filter")?.value || "").trim();
+  if (q) {
+    setGlobal("Clear the search filter before saving order (all saves must be visible).", true);
+    return;
+  }
+  const tb = document.querySelector("#tbl-saves tbody");
+  const ids = [...tb.querySelectorAll("tr")].map((tr) => tr.dataset.gameId).filter(Boolean);
+  if (ids.length === 0) return;
+  try {
+    await api("/save-order", { method: "PUT", body: JSON.stringify({ game_ids: ids }) });
+    setGlobal("Save order saved.", false);
+    await loadAll();
+  } catch (x) {
+    setGlobal(x.message || String(x), true);
+  }
+});
 document.getElementById("history-close")?.addEventListener("click", () => closeHistoryModal());
 document.getElementById("history-modal")?.addEventListener("click", (e) => {
   if (e.target.classList.contains("modal-backdrop")) closeHistoryModal();

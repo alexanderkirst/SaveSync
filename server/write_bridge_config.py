@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Emit /tmp/gbasync-*.json from the environment (Docker sidecar)."""
+"""Emit /tmp/gbasync-*.json from the environment (Docker sidecar).
+
+Timing env vars:
+- ``GBASYNC_DROPBOX_INTERVAL_SECONDS`` — used by ``bridge_sidecar.py`` (seconds between runs; min 10).
+- ``GBASYNC_DROPBOX_POLL_SECONDS`` — optional; **plain mode only** overrides ``poll_seconds`` in the
+  generated JSON for ``dropbox_bridge.py``. If unset, falls back to ``GBASYNC_DROPBOX_INTERVAL_SECONDS``.
+  **delta_api** does not use poll_seconds in JSON; only the sidecar interval matters.
+"""
 from __future__ import annotations
 
 import json

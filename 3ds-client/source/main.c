@@ -115,16 +115,33 @@ static bool id_in_manual(const SyncManualFilter* f, const char* id) {
   return false;
 }
 
-static void sort_remotes(RemoteSave* r, int n) {
-  for (int i = 0; i < n - 1; i++) {
-    for (int j = i + 1; j < n; j++) {
-      if (strcmp(r[i].game_id, r[j].game_id) > 0) {
-        RemoteSave t = r[i];
-        r[i] = r[j];
-        r[j] = t;
+static RemoteSave* g_upload_sort_remote = NULL;
+static int g_upload_sort_rc = 0;
+
+static int cmp_local_for_upload_order(const void* a, const void* b) {
+  const LocalSave* la = (const LocalSave*)a;
+  const LocalSave* lb = (const LocalSave*)b;
+  int ia = -1;
+  int ib = -1;
+  int i;
+  if (g_upload_sort_remote && g_upload_sort_rc > 0) {
+    for (i = 0; i < g_upload_sort_rc; i++) {
+      if (strcmp(g_upload_sort_remote[i].game_id, la->game_id) == 0) {
+        ia = i;
+        break;
+      }
+    }
+    for (i = 0; i < g_upload_sort_rc; i++) {
+      if (strcmp(g_upload_sort_remote[i].game_id, lb->game_id) == 0) {
+        ib = i;
+        break;
       }
     }
   }
+  if (ia >= 0 && ib < 0) return -1;
+  if (ia < 0 && ib >= 0) return 1;
+  if (ia >= 0 && ib >= 0) return ia - ib;
+  return strcmp(la->game_id, lb->game_id);
 }
 
 static void copy_cstr(char* dst, size_t dst_size, const char* src) {
@@ -744,18 +761,22 @@ static const char* baseline_find(const BaselineRow* rows, int n, const char* gam
   return NULL;
 }
 
-static void baseline_upsert(BaselineRow* rows, int* n, int max_n, const char* game_id, const char* sha256) {
+/* Returns true if a row was added or the stored sha changed. */
+static bool baseline_upsert(BaselineRow* rows, int* n, int max_n, const char* game_id, const char* sha256) {
   for (int i = 0; i < *n; i++) {
     if (strcmp(rows[i].game_id, game_id) == 0) {
+      if (strcmp(rows[i].sha256, sha256) == 0) return false;
       copy_cstr(rows[i].sha256, sizeof(rows[i].sha256), sha256);
-      return;
+      return true;
     }
   }
   if (*n < max_n) {
     copy_cstr(rows[*n].game_id, sizeof(rows[*n].game_id), game_id);
     copy_cstr(rows[*n].sha256, sizeof(rows[*n].sha256), sha256);
     (*n)++;
+    return true;
   }
+  return false;
 }
 
 static int baseline_load_merged(const AppConfig* cfg, BaselineRow* rows, int max_rows) {
@@ -774,14 +795,14 @@ static int baseline_load_merged(const AppConfig* cfg, BaselineRow* rows, int max
   return n;
 }
 
-static const char* pick_baseline_root_for_game(
-    const AppConfig* cfg,
+/* roots/nr must come from a single build_save_roots — avoids O(n_rows) redundant rebuilds in baseline_save_merged. */
+static const char* pick_baseline_root_for_game_roots(
+    SaveRoot* roots,
+    int nr,
     const char* game_id,
     LocalSave* locals,
     int n_local) {
   static char out_buf[256];
-  SaveRoot roots[8];
-  const int nr = build_save_roots(cfg, roots, 8);
   if (nr <= 0) {
     out_buf[0] = '\0';
     return out_buf;
@@ -833,7 +854,8 @@ static bool baseline_save_merged(
   for (int i = 0; i < nr; i++) {
     int ns = 0;
     for (int j = 0; j < n; j++) {
-      const char* want = pick_baseline_root_for_game(cfg, rows[j].game_id, locals, n_local);
+      const char* want =
+          pick_baseline_root_for_game_roots(roots, nr, rows[j].game_id, locals, n_local);
       if (save_dir_cmp(want, roots[i].save_dir) == 0) {
         baseline_upsert(subset, &ns, MAX_SAVES, rows[j].game_id, rows[j].sha256);
       }
@@ -2106,6 +2128,26 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
     return false;
   }
 
+  RemoteSave* remote_meta = (RemoteSave*)calloc(MAX_SAVES, sizeof(RemoteSave));
+  int remote_meta_count = 0;
+  if (remote_meta) {
+    int st = 0;
+    unsigned char* body = NULL;
+    size_t blen = 0;
+    if (http_request(cfg, "GET", "/saves", NULL, NULL, 0, &st, &body, &blen) && st == 200) {
+      remote_meta_count = parse_remote_saves((const char*)body, remote_meta, MAX_SAVES);
+    }
+    free(body);
+  }
+
+  if (remote_meta_count > 0) {
+    g_upload_sort_remote = remote_meta;
+    g_upload_sort_rc = remote_meta_count;
+    qsort(local, (size_t)n, sizeof(LocalSave), cmp_local_for_upload_order);
+    g_upload_sort_remote = NULL;
+    g_upload_sort_rc = 0;
+  }
+
   bool picked[MAX_SAVES];
   for (int i = 0; i < n; i++) picked[i] = true;
   bool master_all = true;
@@ -2126,12 +2168,18 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
       if (master_all) {
         manual_filter_free(out);
         out->all = 1;
+        g_upload_sort_remote = NULL;
+        g_upload_sort_rc = 0;
+        free(remote_meta);
         free(local);
         return true;
       }
       manual_filter_free(out);
       out->ids = calloc(MAX_SAVES, 128);
       if (!out->ids) {
+        g_upload_sort_remote = NULL;
+        g_upload_sort_rc = 0;
+        free(remote_meta);
         free(local);
         return false;
       }
@@ -2147,10 +2195,16 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
         manual_filter_free(out);
         continue;
       }
+      g_upload_sort_remote = NULL;
+      g_upload_sort_rc = 0;
+      free(remote_meta);
       free(local);
       return true;
     }
     if (kDown & KEY_B) {
+      g_upload_sort_remote = NULL;
+      g_upload_sort_rc = 0;
+      free(remote_meta);
       free(local);
       return false;
     }
@@ -2192,11 +2246,16 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
           printf("%c [%c] ALL SAVES\n", mark, master_all ? 'x' : ' ');
         } else {
           const LocalSave* L = &local[row - 1];
+          const char* disp = L->game_id;
+          if (remote_meta && remote_meta_count > 0) {
+            const RemoteSave* r = find_remote_by_id(remote_meta, remote_meta_count, L->game_id);
+            if (r && r->display_name[0] != '\0') disp = r->display_name;
+          }
           printf(
               "%c [%c] %.28s\n",
               mark,
               picked[row - 1] ? 'x' : ' ',
-              L->game_id);
+              disp);
         }
       }
       dirty = false;
@@ -2205,6 +2264,9 @@ static bool pick_upload_selection_3ds(const AppConfig* cfg, SyncManualFilter* ou
     gfxSwapBuffers();
     gspWaitForVBlank();
   }
+  g_upload_sort_remote = NULL;
+  g_upload_sort_rc = 0;
+  free(remote_meta);
   free(local);
   return false;
 }
@@ -2228,7 +2290,6 @@ static bool pick_download_selection_3ds(const AppConfig* cfg, SyncManualFilter* 
     free(remote);
     return false;
   }
-  sort_remotes(remote, remote_count);
 
   bool picked[MAX_SAVES];
   for (int i = 0; i < remote_count; i++) picked[i] = true;
@@ -2315,11 +2376,13 @@ static bool pick_download_selection_3ds(const AppConfig* cfg, SyncManualFilter* 
           printf("%c [%c] ALL SAVES\n", mark, master_all ? 'x' : ' ');
         } else {
           const RemoteSave* R = &remote[row - 1];
+          const char* disp = R->game_id;
+          if (R->display_name[0] != '\0') disp = R->display_name;
           printf(
               "%c [%c] %.28s\n",
               mark,
               picked[row - 1] ? 'x' : ' ',
-              R->game_id);
+              disp);
         }
       }
       dirty = false;
@@ -2521,9 +2584,25 @@ static void save_viewer_3ds(AppConfig* cfg) {
   }
   int n_merge = 0;
   int i;
-  for (i = 0; i < lc; i++) n_merge = add_merge_id(merge_ids, n_merge, cap, local[i].game_id);
   for (i = 0; i < rc; i++) n_merge = add_merge_id(merge_ids, n_merge, cap, remote[i].game_id);
-  if (n_merge > 1) qsort(merge_ids, (size_t)n_merge, sizeof(merge_ids[0]), cmp_merge_id_str);
+  {
+    char (*local_only)[128] = calloc((size_t)MAX_SAVES, sizeof(*local_only));
+    if (!local_only) {
+      free(merge_ids);
+      free(local);
+      free(remote);
+      return;
+    }
+    int n_lo = 0;
+    for (i = 0; i < lc; i++) {
+      if (!find_remote_by_id(remote, rc, local[i].game_id)) {
+        copy_cstr(local_only[n_lo++], 128, local[i].game_id);
+      }
+    }
+    qsort(local_only, (size_t)n_lo, sizeof(local_only[0]), cmp_merge_id_str);
+    for (i = 0; i < n_lo; i++) n_merge = add_merge_id(merge_ids, n_merge, cap, local_only[i]);
+    free(local_only);
+  }
   if (n_merge <= 0) {
     consoleClear();
     printf("Save viewer: no saves (local or server).\n");
@@ -2975,7 +3054,7 @@ static SyncSummary run_sync(AppConfig* cfg, SyncAction action, const SyncManualF
     return summary;
   }
 
-  /* AUTO — merge id list on heap (large stack arrays overflow 3DS default stack) */
+  /* AUTO — merge / local-only id lists on heap (~49KB each if stack-allocated overflows 3DS stack) */
   const int merge_cap = MAX_SAVES * 2;
   char (*merge_ids)[128] = calloc((size_t)merge_cap, sizeof(*merge_ids));
   if (!merge_ids) {
@@ -2986,14 +3065,32 @@ static SyncSummary run_sync(AppConfig* cfg, SyncAction action, const SyncManualF
     return summary;
   }
   int n_merge = 0;
-  for (int i = 0; i < local_count; i++) {
-    n_merge = add_merge_id(merge_ids, n_merge, merge_cap, local[i].game_id);
-  }
-  for (int i = 0; i < remote_count; i++) {
+  int i;
+  for (i = 0; i < remote_count; i++) {
     n_merge = add_merge_id(merge_ids, n_merge, merge_cap, remote[i].game_id);
   }
-
-  debug_report_sync_start_3ds(cfg, local_count, n_baseline);
+  {
+    char (*local_only)[128] = calloc((size_t)MAX_SAVES, sizeof(*local_only));
+    if (!local_only) {
+      printf("ERROR: out of memory (local id list)\n");
+      free(merge_ids);
+      free(baseline);
+      free(local);
+      free(remote);
+      return summary;
+    }
+    int n_lo = 0;
+    for (i = 0; i < local_count; i++) {
+      if (!find_remote_by_id(remote, remote_count, local[i].game_id)) {
+        copy_cstr(local_only[n_lo++], 128, local[i].game_id);
+      }
+    }
+    qsort(local_only, (size_t)n_lo, sizeof(local_only[0]), cmp_merge_id_str);
+    for (i = 0; i < n_lo; i++) {
+      n_merge = add_merge_id(merge_ids, n_merge, merge_cap, local_only[i]);
+    }
+    free(local_only);
+  }
 
   AutoPlanRow* plan = (AutoPlanRow*)calloc((size_t)n_merge, sizeof(AutoPlanRow));
   if (!plan) {
@@ -3038,6 +3135,8 @@ static SyncSummary run_sync(AppConfig* cfg, SyncAction action, const SyncManualF
       int m;
       printf("\n");
       printf("Already Up To Date\n");
+      fflush(stdout);
+      bool baseline_dirty = false;
       for (m = 0; m < n_merge; m++) {
         const char* id = merge_ids[m];
         if (is_game_locked(cfg, id)) continue;
@@ -3045,12 +3144,14 @@ static SyncSummary run_sync(AppConfig* cfg, SyncAction action, const SyncManualF
           LocalSave* l = find_local_by_id(local, local_count, id);
           RemoteSave* r = find_remote_by_id(remote, remote_count, id);
           if (l && r && strcmp(l->sha256, r->sha256) == 0) {
-            baseline_upsert(baseline, &n_baseline, MAX_SAVES, id, l->sha256);
+            if (baseline_upsert(baseline, &n_baseline, MAX_SAVES, id, l->sha256)) baseline_dirty = true;
           }
         }
       }
-      if (!baseline_save_merged(cfg, baseline, n_baseline, local, local_count)) {
-        printf("WARN: could not write .gbasync-baseline\n");
+      if (baseline_dirty) {
+        if (!baseline_save_merged(cfg, baseline, n_baseline, local, local_count)) {
+          printf("WARN: could not write .gbasync-baseline\n");
+        }
       }
       sync_status_after_server(cfg, 1, 1, "");
       summary.already_up_to_date = 1;
@@ -3062,6 +3163,9 @@ static SyncSummary run_sync(AppConfig* cfg, SyncAction action, const SyncManualF
       return summary;
     }
   }
+
+  /* After "Already Up To Date" early return — avoids extra HTTP wait before post-sync menu. */
+  debug_report_sync_start_3ds(cfg, local_count, n_baseline);
 
   if (!preview_auto_plan_3ds(
           cfg,

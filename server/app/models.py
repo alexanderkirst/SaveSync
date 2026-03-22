@@ -58,6 +58,10 @@ class SaveListItem(BaseModel):
     platform_source: str | None = None
     conflict: bool = False
     display_name: str | None = None
+    list_order: int = Field(
+        default=0,
+        description="Position in GET /saves (0 = first). Matches admin row order.",
+    )
 
 
 class HistoryEntry(BaseModel):
@@ -135,3 +139,9 @@ class IndexRoutingPut(BaseModel):
     aliases: dict[str, str] = Field(default_factory=dict)
     rom_sha1: dict[str, str] = Field(default_factory=dict)
     tombstones: dict[str, str] = Field(default_factory=dict)
+
+
+class SaveOrderPut(BaseModel):
+    """Full ordered list of ``game_id`` values (must match ``GET /saves`` exactly)."""
+
+    game_ids: list[str] = Field(default_factory=list)

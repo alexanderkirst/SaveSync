@@ -361,3 +361,29 @@ def test_history_revision_keep_and_list(tmp_path: Path) -> None:
     assert r2.status_code == 200
     h3 = client.get("/save/keep-game/history", headers=_auth_headers())
     assert h3.json()["entries"][0]["keep"] is False
+
+
+def test_save_order_admin_and_list_saves(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    for gid in ("b-game", "a-game"):
+        data = gid.encode()
+        sha = hashlib.sha256(data).hexdigest()
+        params = {
+            "last_modified_utc": "2026-03-17T21:00:00+00:00",
+            "sha256": sha,
+            "size_bytes": len(data),
+            "filename_hint": f"{gid}.sav",
+            "platform_source": "test",
+        }
+        assert client.put(f"/save/{gid}", params=params, content=data, headers=_auth_headers()).status_code == 200
+    r1 = client.get("/saves", headers=_auth_headers())
+    assert r1.status_code == 200
+    ids_default = [x["game_id"] for x in r1.json()["saves"]]
+    assert ids_default == ["b-game", "a-game"]
+    perm = ["a-game", "b-game"]
+    put = client.put("/admin/api/save-order", json={"game_ids": perm}, headers=_auth_headers())
+    assert put.status_code == 200
+    r2 = client.get("/saves", headers=_auth_headers())
+    body = r2.json()["saves"]
+    assert [x["game_id"] for x in body] == perm
+    assert [x["list_order"] for x in body] == [0, 1]
