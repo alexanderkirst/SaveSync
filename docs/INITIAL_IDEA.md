@@ -18,7 +18,7 @@ Cross-platform GBA save synchronization system across:
 
 1. Build FastAPI sync server with API-key auth.
 2. Implement binary save upload/download plus metadata index.
-3. Add version-history backups and conflict detection; **`DELETE /save/{game_id}`** for cleanup.
+3. Add version-history backups (retention cap, **keep** pins, list/restore API) and conflict detection; **`DELETE /save/{game_id}`** for cleanup.
 4. Build desktop Delta bridge with:
    - one-shot mode (`--once`)
    - watch mode (`--watch`)
@@ -45,7 +45,7 @@ Cross-platform GBA save synchronization system across:
 2. Richer telemetry/log rotation — still open.
 3. Server tests + smoke scripts; broader edge-case matrix — ongoing.
 4. Packaging/release scripts for each target — shipped (`RELEASE.md`, `dist/`).
-5. Server **`DELETE /save/{game_id}`**; console HTTP hardening; baseline Auto sync.
+5. Server **`DELETE /save/{game_id}`**; console HTTP hardening; baseline Auto sync; optional **save history** from consoles (restore server-side; **keep** pins; display names in save viewer).
 
 ## Current status
 
@@ -57,8 +57,8 @@ Cross-platform GBA save synchronization system across:
 
 ## Release packaging
 
-Use `RELEASE.md` for reproducible packaging across all targets.
-Use `USER_GUIDE.md` for end-user setup and operation.
+Use **`docs/RELEASE.md`** for reproducible packaging across all targets.
+Use **`docs/USER_GUIDE.md`** for end-user setup and operation.
 Use `dist/README.md` for artifact-by-artifact install guidance.
 
 Quick commands:

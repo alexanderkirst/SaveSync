@@ -124,6 +124,16 @@ def test_equal_timestamp_different_hash_marks_conflict(tmp_path: Path) -> None:
     assert effective.conflict is True
 
 
+def test_decode_history_backup_stamp_from_stem() -> None:
+    from app.storage import decode_history_backup_stamp_from_stem
+
+    stem = "2026-03-17T21-00-00+00-00-" + "a" * 8
+    assert decode_history_backup_stamp_from_stem(stem) == "2026-03-17T21:00:00+00:00"
+    stem_z = "2026-03-17T21-00-00Z-" + "b" * 8
+    assert decode_history_backup_stamp_from_stem(stem_z) == "2026-03-17T21:00:00Z"
+    assert decode_history_backup_stamp_from_stem("not-a-valid-name") is None
+
+
 def test_history_backup_is_created_on_replace(tmp_path: Path) -> None:
     store = SaveStore(
         save_root=tmp_path / "saves",
@@ -151,3 +161,62 @@ def test_history_backup_is_created_on_replace(tmp_path: Path) -> None:
     store.upsert(game_id, new_data, new_meta)
     backups = list((tmp_path / "history" / game_id).glob("*.sav"))
     assert backups
+
+
+def test_history_trims_to_max(tmp_path: Path) -> None:
+    store = SaveStore(
+        save_root=tmp_path / "saves",
+        history_root=tmp_path / "history",
+        index_path=tmp_path / "index.json",
+        keep_history=True,
+        history_max_per_game=2,
+    )
+    game_id = "trim-game"
+    payloads = [b"a", b"b", b"c", b"d"]
+    for i, payload in enumerate(payloads):
+        meta = SaveMeta(
+            game_id=game_id,
+            last_modified_utc=f"2026-01-{10+i:02d}T00:00:00+00:00",
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size_bytes=len(payload),
+        )
+        store.upsert(game_id, payload, meta)
+    hist_files = list((tmp_path / "history" / game_id).glob("*.sav"))
+    assert len(hist_files) <= 2
+
+
+def test_history_pinned_survives_trim_over_unpinned_limit(tmp_path: Path) -> None:
+    """Pinned backups are not deleted; only the newest N *unpinned* history files are kept."""
+    store = SaveStore(
+        save_root=tmp_path / "saves",
+        history_root=tmp_path / "history",
+        index_path=tmp_path / "index.json",
+        keep_history=True,
+        history_max_per_game=2,
+    )
+    game_id = "pin-survives"
+    payloads = [b"a", b"b", b"c", b"d"]
+    for i, payload in enumerate(payloads):
+        meta = SaveMeta(
+            game_id=game_id,
+            last_modified_utc=f"2026-01-{10 + i:02d}T00:00:00+00:00",
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size_bytes=len(payload),
+        )
+        store.upsert(game_id, payload, meta)
+    hist = store.list_history(game_id)
+    assert len(hist) == 2
+    oldest_fn = hist[-1]["filename"]
+    assert store.set_history_revision_keep(game_id, oldest_fn, True) is True
+    meta5 = SaveMeta(
+        game_id=game_id,
+        last_modified_utc="2026-01-20T00:00:00+00:00",
+        sha256=hashlib.sha256(b"e").hexdigest(),
+        size_bytes=1,
+    )
+    store.upsert(game_id, b"e", meta5)
+    hist2 = store.list_history(game_id)
+    names = [e["filename"] for e in hist2]
+    assert oldest_fn in names
+    assert any(e["filename"] == oldest_fn and e.get("keep") for e in hist2)
+    assert len(hist2) == 3

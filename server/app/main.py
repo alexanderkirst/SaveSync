@@ -15,7 +15,16 @@ from pydantic import BaseModel
 
 from .admin import router as admin_router
 from .auth import require_api_key
-from .models import SaveListResponse, SaveMeta
+from .models import (
+    DisplayNamePatch,
+    HistoryEntry,
+    HistoryListResponse,
+    RestoreRequest,
+    RevisionKeepPatch,
+    RevisionLabelPatch,
+    SaveListResponse,
+    SaveMeta,
+)
 from .storage import SaveStore
 
 # Dev: server/app/main.py -> repo root has bridge/ and admin-web/.
@@ -32,12 +41,14 @@ SAVE_ROOT = Path(os.getenv("SAVE_ROOT", "./data/saves")).resolve()
 HISTORY_ROOT = Path(os.getenv("HISTORY_ROOT", "./data/history")).resolve()
 INDEX_PATH = Path(os.getenv("INDEX_PATH", "./data/index.json")).resolve()
 ENABLE_VERSION_HISTORY = os.getenv("ENABLE_VERSION_HISTORY", "true").lower() == "true"
+HISTORY_MAX_PER_GAME = int(os.getenv("HISTORY_MAX_VERSIONS_PER_GAME", "5"))
 
 store = SaveStore(
     save_root=SAVE_ROOT,
     history_root=HISTORY_ROOT,
     index_path=INDEX_PATH,
     keep_history=ENABLE_VERSION_HISTORY,
+    history_max_per_game=HISTORY_MAX_PER_GAME,
 )
 
 app = FastAPI(title="GBAsync Server", version="0.1.2")
@@ -204,6 +215,67 @@ def get_save_meta(game_id: str) -> SaveMeta:
     if not meta:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Save not found")
     return meta
+
+
+def _validate_game_id_path(game_id: str) -> None:
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+
+
+@app.get("/save/{game_id}/history", response_model=HistoryListResponse, dependencies=[Depends(require_api_key)])
+def get_save_history(game_id: str) -> HistoryListResponse:
+    _validate_game_id_path(game_id)
+    raw = store.list_history(game_id)
+    return HistoryListResponse(entries=[HistoryEntry(**e) for e in raw])
+
+
+@app.post("/save/{game_id}/restore", dependencies=[Depends(require_api_key)])
+def restore_save_from_history(game_id: str, body: RestoreRequest) -> JSONResponse:
+    _validate_game_id_path(game_id)
+    try:
+        effective = store.restore_from_history(game_id, body.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if _dropbox_sync_on_upload_enabled():
+        _schedule_dropbox_sync_after_upload()
+    return JSONResponse(
+        status_code=200,
+        content={"ok": True, "effective_meta": effective.model_dump()},
+    )
+
+
+@app.patch("/save/{game_id}/meta", dependencies=[Depends(require_api_key)])
+def patch_save_meta(game_id: str, body: DisplayNamePatch) -> JSONResponse:
+    _validate_game_id_path(game_id)
+    if not store.set_display_name(game_id, body.display_name):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Save not found")
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
+@app.patch("/save/{game_id}/history/revision", dependencies=[Depends(require_api_key)])
+def patch_history_revision_label(game_id: str, body: RevisionLabelPatch) -> JSONResponse:
+    _validate_game_id_path(game_id)
+    try:
+        ok = store.set_history_revision_display_name(game_id, body.filename, body.display_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="save or history file not found")
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
+@app.patch("/save/{game_id}/history/revision/keep", dependencies=[Depends(require_api_key)])
+def patch_history_revision_keep(game_id: str, body: RevisionKeepPatch) -> JSONResponse:
+    _validate_game_id_path(game_id)
+    try:
+        ok = store.set_history_revision_keep(game_id, body.filename, body.keep)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="save or history file not found")
+    return JSONResponse(status_code=200, content={"ok": True})
 
 
 @app.get("/save/{game_id}", dependencies=[Depends(require_api_key)])

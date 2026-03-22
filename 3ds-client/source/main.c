@@ -32,6 +32,7 @@ typedef struct {
   char server_updated_at[40];
   char sha256[65];
   char filename_hint[128];
+  char display_name[128];
 } RemoteSave;
 
 typedef struct {
@@ -1049,17 +1050,346 @@ static int parse_remote_saves(const char* json, RemoteSave* out, int max_items) 
   while (count < max_items) {
     const char* gid = strstr(p, "\"game_id\":\"");
     if (!gid) break;
+    const char* next_gid = strstr(gid + 12, "\"game_id\":\"");
+    size_t seg_len = next_gid ? (size_t)(next_gid - gid) : strlen(gid);
+    char seg[4096];
+    if (seg_len >= sizeof(seg)) seg_len = sizeof(seg) - 1;
+    memcpy(seg, gid, seg_len);
+    seg[seg_len] = '\0';
     RemoteSave item;
     memset(&item, 0, sizeof(item));
-    if (!json_extract_string(gid, "game_id", item.game_id, sizeof(item.game_id))) break;
-    json_extract_string(gid, "last_modified_utc", item.last_modified_utc, sizeof(item.last_modified_utc));
-    json_extract_string(gid, "server_updated_at", item.server_updated_at, sizeof(item.server_updated_at));
-    json_extract_string(gid, "sha256", item.sha256, sizeof(item.sha256));
-    json_extract_string(gid, "filename_hint", item.filename_hint, sizeof(item.filename_hint));
+    json_extract_string(seg, "game_id", item.game_id, sizeof(item.game_id));
+    json_extract_string(seg, "last_modified_utc", item.last_modified_utc, sizeof(item.last_modified_utc));
+    json_extract_string(seg, "server_updated_at", item.server_updated_at, sizeof(item.server_updated_at));
+    json_extract_string(seg, "sha256", item.sha256, sizeof(item.sha256));
+    json_extract_string(seg, "filename_hint", item.filename_hint, sizeof(item.filename_hint));
+    json_extract_string(seg, "display_name", item.display_name, sizeof(item.display_name));
     out[count++] = item;
-    p = gid + 10;
+    p = next_gid ? next_gid : gid + strlen(gid);
   }
   return count;
+}
+
+#define MAX_HISTORY_FILES 32
+#define HISTORY_NAME_LEN 256
+
+typedef struct {
+  char filename[HISTORY_NAME_LEN];
+  char display_name[128];
+  int keep;
+} HistoryRow3ds;
+
+static int parse_history_rows_c(const char* json, HistoryRow3ds* rows, int max_rows) {
+  static char chunk_buf[2048];
+  int n = 0;
+  const char* p = json;
+  while (n < max_rows) {
+    const char* f = strstr(p, "\"filename\":\"");
+    if (!f) break;
+    const char* next_f = strstr(f + 14, "\"filename\":\"");
+    const char* chunk_end = next_f ? next_f : (json + strlen(json));
+    size_t chunk_len = (size_t)(chunk_end - f);
+    if (chunk_len >= sizeof(chunk_buf)) chunk_len = sizeof(chunk_buf) - 1;
+    memcpy(chunk_buf, f, chunk_len);
+    chunk_buf[chunk_len] = '\0';
+
+    f += 12;
+    const char* e = strchr(f, '"');
+    if (!e) break;
+    {
+      size_t len = (size_t)(e - f);
+      if (len >= HISTORY_NAME_LEN) len = HISTORY_NAME_LEN - 1;
+      memcpy(rows[n].filename, f, len);
+      rows[n].filename[len] = '\0';
+    }
+
+    rows[n].display_name[0] = '\0';
+    if (strstr(chunk_buf, "\"display_name\":null") == NULL) {
+      const char* d = strstr(chunk_buf, "\"display_name\":\"");
+      if (d) {
+        d += 16;
+        const char* de = strchr(d, '"');
+        if (de) {
+          size_t dl = (size_t)(de - d);
+          if (dl >= sizeof(rows[n].display_name)) dl = sizeof(rows[n].display_name) - 1;
+          memcpy(rows[n].display_name, d, dl);
+          rows[n].display_name[dl] = '\0';
+        }
+      }
+    }
+
+    rows[n].keep = 0;
+    {
+      const char* kp = strstr(chunk_buf, "\"keep\"");
+      if (kp) {
+        const char* colon = strchr(kp, ':');
+        if (colon) {
+          colon++;
+          while (*colon == ' ' || *colon == '\t') {
+            colon++;
+          }
+          if (strncmp(colon, "true", 4) == 0) {
+            rows[n].keep = 1;
+          }
+        }
+      }
+    }
+
+    n++;
+    p = chunk_end;
+  }
+  return n;
+}
+
+/** Escape `s` as a JSON string (ASCII printable + quote/backslash escapes). Returns -1 on overflow or invalid char. */
+static int json_quote_cstr(const char* s, char* out, size_t out_sz) {
+  size_t j = 0;
+  if (!s || !out || out_sz < 4) return -1;
+  out[j++] = '"';
+  for (; *s; s++) {
+    unsigned char c = (unsigned char)*s;
+    if (c == '"' || c == '\\') {
+      if (j + 2 >= out_sz) return -1;
+      out[j++] = '\\';
+    } else if (c < 32 || c > 126) {
+      return -1;
+    }
+    if (j + 1 >= out_sz) return -1;
+    out[j++] = (char)c;
+  }
+  if (j + 1 >= out_sz) return -1;
+  out[j++] = '"';
+  out[j] = '\0';
+  return (int)j;
+}
+
+static bool history_keep_patch_3ds(const AppConfig* cfg, const char* game_id, const char* filename, int keep) {
+  char quoted[512];
+  if (json_quote_cstr(filename, quoted, sizeof(quoted)) < 0) return false;
+  char body_buf[640];
+  int bl = snprintf(
+      body_buf,
+      sizeof(body_buf),
+      "{\"filename\":%s,\"keep\":%s}",
+      quoted,
+      keep ? "true" : "false");
+  if (bl <= 0 || (size_t)bl >= sizeof(body_buf)) return false;
+  char path[384];
+  snprintf(path, sizeof(path), "/save/%s/history/revision/keep", game_id);
+  int st = 0;
+  unsigned char* resp = NULL;
+  size_t resp_len = 0;
+  bool ok = http_request(
+                cfg,
+                "PATCH",
+                path,
+                "application/json",
+                (const unsigned char*)body_buf,
+                (size_t)bl,
+                &st,
+                &resp,
+                &resp_len)
+            && st == 200;
+  free(resp);
+  return ok;
+}
+
+static bool history_restore_3ds(const AppConfig* cfg, const char* game_id, const char* filename) {
+  char body[512];
+  int bl = snprintf(body, sizeof(body), "{\"filename\":\"%s\"}", filename);
+  if (bl <= 0 || (size_t)bl >= sizeof(body)) return false;
+  char path[384];
+  snprintf(path, sizeof(path), "/save/%s/restore", game_id);
+  int st = 0;
+  unsigned char* resp = NULL;
+  size_t resp_len = 0;
+  bool ok = http_request(
+                cfg,
+                "POST",
+                path,
+                "application/json",
+                (const unsigned char*)body,
+                (size_t)bl,
+                &st,
+                &resp,
+                &resp_len)
+            && st == 200;
+  free(resp);
+  return ok;
+}
+
+static void save_history_picker_3ds(AppConfig* cfg, const char* game_id) {
+  char path[384];
+  snprintf(path, sizeof(path), "/save/%s/history", game_id);
+  int status = 0;
+  unsigned char* body = NULL;
+  size_t body_len = 0;
+  if (!http_request(cfg, "GET", path, NULL, NULL, 0, &status, &body, &body_len) || status != 200) {
+    consoleClear();
+    printf("History: GET failed");
+    if (status > 0) printf(" (HTTP %d)", status);
+    printf("\nB: back\n");
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+    free(body);
+    while (aptMainLoop()) {
+      hidScanInput();
+      if (hidKeysDown() & KEY_B) break;
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+    }
+    return;
+  }
+  HistoryRow3ds* rows = (HistoryRow3ds*)calloc((size_t)MAX_HISTORY_FILES, sizeof(HistoryRow3ds));
+  if (!rows) {
+    free(body);
+    consoleClear();
+    printf("History: out of memory\nB: back\n");
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+    while (aptMainLoop()) {
+      hidScanInput();
+      if (hidKeysDown() & KEY_B) break;
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+    }
+    return;
+  }
+  int n_names = parse_history_rows_c((const char*)body, rows, MAX_HISTORY_FILES);
+  free(body);
+  if (n_names <= 0) {
+    free(rows);
+    consoleClear();
+    printf("No history backups for this game.\nB: back\n");
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+    while (aptMainLoop()) {
+      hidScanInput();
+      if (hidKeysDown() & KEY_B) break;
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+    }
+    return;
+  }
+
+  int cursor = 0;
+  int scroll = 0;
+  const int kVisibleEntries = 6;
+  const int total = n_names;
+  bool dirty = true;
+  while (aptMainLoop()) {
+    hidScanInput();
+    u32 kDown = hidKeysDown();
+    if (kDown & KEY_B) break;
+    if (kDown & KEY_R) {
+      int new_keep = rows[cursor].keep ? 0 : 1;
+      if (history_keep_patch_3ds(cfg, game_id, rows[cursor].filename, new_keep)) {
+        rows[cursor].keep = new_keep;
+        dirty = true;
+      }
+      continue;
+    }
+    if (kDown & KEY_A) {
+      consoleClear();
+      printf("Restore this version?\n");
+      if (rows[cursor].display_name[0] != '\0') printf("Label: %s\n", rows[cursor].display_name);
+      printf("Keep: %s\n", rows[cursor].keep ? "yes" : "no");
+      printf("File: %s\n", rows[cursor].filename);
+      printf("A: confirm  B: cancel\n");
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+      while (aptMainLoop()) {
+        hidScanInput();
+        u32 k2 = hidKeysDown();
+        if (k2 & KEY_B) break;
+        if (k2 & KEY_A) {
+          if (history_restore_3ds(cfg, game_id, rows[cursor].filename)) {
+            consoleClear();
+            printf("Restored. Download this game to update device.\nB: back\n");
+          } else {
+            consoleClear();
+            printf("Restore failed.\nB: back\n");
+          }
+          gfxFlushBuffers();
+          gfxSwapBuffers();
+          gspWaitForVBlank();
+          while (aptMainLoop()) {
+            hidScanInput();
+            if (hidKeysDown() & KEY_B) {
+              free(rows);
+              return;
+            }
+            gfxFlushBuffers();
+            gfxSwapBuffers();
+            gspWaitForVBlank();
+          }
+          free(rows);
+          return;
+        }
+        gfxFlushBuffers();
+        gfxSwapBuffers();
+        gspWaitForVBlank();
+      }
+      dirty = true;
+      continue;
+    }
+    if (kDown & KEY_DUP) {
+      cursor = (cursor + total - 1) % total;
+      dirty = true;
+    }
+    if (kDown & KEY_DDOWN) {
+      cursor = (cursor + 1) % total;
+      dirty = true;
+    }
+    if (cursor < scroll) scroll = cursor;
+    if (cursor >= scroll + kVisibleEntries) scroll = cursor - kVisibleEntries + 1;
+    if (scroll < 0) scroll = 0;
+    {
+      int max_scroll = total > kVisibleEntries ? total - kVisibleEntries : 0;
+      if (scroll > max_scroll) scroll = max_scroll;
+    }
+
+    if (!dirty) {
+      gfxFlushBuffers();
+      gfxSwapBuffers();
+      gspWaitForVBlank();
+      continue;
+    }
+
+    consoleClear();
+    printf("--- History ---\n\n");
+    {
+      const int kMenuLeftCol = 22;
+      printf("%-*s%s\n", kMenuLeftCol, "UP/DOWN: move", "");
+      printf("%-*s%s\n", kMenuLeftCol, "A: restore", "");
+      printf("%-*s%s\n", kMenuLeftCol, "R: keep / unkeep", "");
+      printf("%-*s%s\n", kMenuLeftCol, "B: back", "");
+    }
+    printf("\n");
+    {
+      int row;
+      for (row = scroll; row < scroll + kVisibleEntries && row < total; row++) {
+        char mark = (row == cursor) ? '>' : ' ';
+        const char* lbl = (rows[row].display_name[0] != '\0') ? rows[row].display_name : "-";
+        const char* kpre = rows[row].keep ? "[KEEP] " : "";
+        printf("%c%s%.40s\n", mark, kpre, lbl);
+        printf("  %.48s\n", rows[row].filename);
+        printf("\n");
+      }
+    }
+    dirty = false;
+    gfxFlushBuffers();
+    gfxSwapBuffers();
+    gspWaitForVBlank();
+  }
+  free(rows);
 }
 
 static bool local_game_id_exists(LocalSave* local, int local_count, const char* game_id) {
@@ -1846,6 +2176,10 @@ static void save_viewer_3ds(AppConfig* cfg) {
     hidScanInput();
     u32 kDown = hidKeysDown();
     if (kDown & KEY_B) break;
+    if (kDown & KEY_A) {
+      save_history_picker_3ds(cfg, merge_ids[cursor]);
+      dirty = true;
+    }
     if (kDown & KEY_R) {
       toggle_locked_id(cfg, merge_ids[cursor]);
       (void)save_locked_ids_to_ini_3ds(config_path, cfg->locked_ids);
@@ -1880,6 +2214,7 @@ static void save_viewer_3ds(AppConfig* cfg) {
     {
       const int kMenuLeftCol = 22;
       printf("%-*s%s\n", kMenuLeftCol, "UP/DOWN: move", "");
+      printf("%-*s%s\n", kMenuLeftCol, "A: history / restore", "");
       printf("%-*s%s\n", kMenuLeftCol, "R: toggle lock -> config", "");
       printf("%-*s%s\n", kMenuLeftCol, "b: back", "");
     }
@@ -1888,7 +2223,13 @@ static void save_viewer_3ds(AppConfig* cfg) {
       char mark = (row == cursor) ? '>' : ' ';
       char lk[8];
       copy_cstr(lk, sizeof(lk), is_game_locked(cfg, merge_ids[row]) ? "[L]" : "   ");
-      printf("%c%s %.28s\n", mark, lk, merge_ids[row]);
+      {
+        const RemoteSave* r = find_remote_by_id(remote, rc, merge_ids[row]);
+        const char* disp =
+            (r && r->display_name[0] != '\0') ? r->display_name : merge_ids[row];
+        printf("%c%s %.28s\n", mark, lk, disp);
+      }
+      printf("\n");
     }
     dirty = false;
     gfxFlushBuffers();

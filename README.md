@@ -13,7 +13,8 @@
 - **Per-game locks** — Mark games you don’t want touched in Auto, so a stray sync doesn’t overwrite something you care about.
 - **Status at a glance** — A small **status file** next to your saves shows last sync, whether the server was reachable, and Dropbox-related results when you use that integration.
 - **Conflicts handled explicitly** — If the copy on the device and the copy on the server both diverged, you get a **conflict** prompt instead of silent corruption.
-- **Optional web admin** — With a password set in config, you can open a simple **admin UI** in the browser (saves, conflicts, index tools, optional actions). Handy for troubleshooting without SSH.
+- **Optional web admin** — With a password set in config, you can open a simple **admin UI** in the browser (saves, conflicts, index tools, **save history** with restore and **keep** pins, optional actions). Handy for troubleshooting without SSH.
+- **Version history on the server** — Optional per-game backups when a save is replaced; configurable retention, **pin** favorites so they are not trimmed, and restore from the admin UI or from **Switch/3DS** (then pull the save down to the device).
 
 ---
 
@@ -71,6 +72,7 @@ Not everyone needs this. If you sync with **Delta** or **Dropbox**, follow **`do
 | **`dist/README.md`** | What’s in release zips and where files go |
 | **`admin-web/README.md`** | Enabling and using the optional admin UI (`/admin/ui/`) |
 | **`docs/TODO.md`** | What’s shipped vs planned |
+| **`docs/HARDWARE_VALIDATION_CHECKLIST.md`** | Optional real-device test matrix (sync, conflicts, history) |
 | **`docs/RELEASE.md`** | How maintainers build and package releases |
 
 ---

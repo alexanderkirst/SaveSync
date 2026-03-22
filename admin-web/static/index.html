@@ -2,32 +2,34 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="color-scheme" content="dark" />
   <title>GBAsync Admin</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=3" />
 </head>
 <body>
   <header class="top">
     <h1>GBAsync Admin</h1>
-    <p class="sub">Read-only views and guarded actions. Uses the same origin as the API.</p>
+    <p class="sub">Server status, saves, and guarded actions. Same origin as the API.</p>
   </header>
 
   <section id="login-panel" class="panel">
     <h2>Sign in</h2>
-    <p class="hint">Set <code>GBASYNC_ADMIN_PASSWORD</code> on the server. Session cookie is HttpOnly.</p>
+    <p class="hint">Set <code>GBASYNC_ADMIN_PASSWORD</code> on the server. Your session uses an HttpOnly cookie.</p>
     <form id="login-form">
       <label>Password <input type="password" id="login-password" autocomplete="current-password" /></label>
-      <button type="submit">Sign in</button>
+      <button type="submit" class="btn-primary">Continue</button>
       <span id="login-error" class="error"></span>
     </form>
   </section>
 
   <main id="app-main" class="hidden">
-    <nav class="tabs">
+    <nav class="tabs" aria-label="Main">
       <button type="button" data-tab="dash" class="active">Dashboard</button>
       <button type="button" data-tab="saves">Saves</button>
       <button type="button" data-tab="conflicts">Conflicts</button>
-      <button type="button" data-tab="routing">Index routing</button>
+      <button type="button" data-tab="routing">Routing</button>
       <button type="button" data-tab="slot">Slot map</button>
       <button type="button" data-tab="actions">Actions</button>
       <button type="button" id="btn-logout" class="logout">Sign out</button>
@@ -35,51 +37,150 @@
 
     <section id="tab-dash" class="tab-pane">
       <h2>Dashboard</h2>
-      <pre id="dash-json" class="json"></pre>
+      <p class="hint" id="dash-summary"></p>
+      <div class="stat-grid" aria-label="Summary">
+        <div class="stat-card">
+          <div class="stat-value" id="dash-save-count">—</div>
+          <div class="stat-label">Saves</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="dash-conflict-count">—</div>
+          <div class="stat-label">Conflicts</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value stat-value--sm" id="dash-dropbox-mode">—</div>
+          <div class="stat-label">Dropbox mode</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">Paths</div>
+        <dl class="dash-kv">
+          <div><dt>Index</dt><dd id="dash-index-path" class="mono path-dd"></dd></div>
+          <div><dt>Save root</dt><dd id="dash-save-root" class="mono path-dd"></dd></div>
+          <div><dt>History root</dt><dd id="dash-history-root" class="mono path-dd"></dd></div>
+        </dl>
+      </div>
+      <div class="card">
+        <div class="card-header">Settings</div>
+        <div class="settings-row">
+          <label for="setting-history-max">Max history versions per game</label>
+          <div class="settings-inline">
+            <input type="number" id="setting-history-max" min="0" max="1000000" step="1" inputmode="numeric" />
+            <button type="button" id="btn-save-settings" class="btn-primary">Save</button>
+          </div>
+          <p class="hint settings-hint">0 = unlimited history files per game.</p>
+        </div>
+        <p id="dash-settings-msg" class="msg settings-msg"></p>
+      </div>
     </section>
+
     <section id="tab-saves" class="tab-pane hidden">
       <h2>Saves</h2>
-      <div class="table-wrap"><table id="tbl-saves"><thead><tr>
-        <th>game_id</th><th>sha256</th><th>size</th><th>conflict</th><th>last_modified</th><th></th>
+      <p class="hint">Filter by <code>game_id</code> or display name. <strong>Modified</strong> is the client-reported file time; <strong>Server upload</strong> is when the server last stored this revision. Restoring replaces the server’s current file (the old one is kept in history). After a restore, run <strong>download</strong> on each device.</p>
+      <div class="filter-row">
+        <label for="saves-filter">Search</label>
+        <input type="text" id="saves-filter" placeholder="Filter saves…" autocomplete="off" enterkeyhint="search" />
+      </div>
+      <div id="saves-cards" class="saves-cards" aria-label="Saves (mobile layout)"></div>
+      <div class="table-wrap saves-table-desktop"><table id="tbl-saves"><thead><tr>
+        <th>game_id</th><th>display name</th><th>sha256</th><th>size</th><th>conflict</th><th>modified</th><th>server upload</th><th>actions</th>
       </tr></thead><tbody></tbody></table></div>
     </section>
+
     <section id="tab-conflicts" class="tab-pane hidden">
       <h2>Conflicts</h2>
+      <p class="hint">Games where local and server both diverged from the baseline.</p>
       <div class="table-wrap"><table id="tbl-conflicts"><thead><tr>
-        <th>game_id</th><th>sha256</th><th></th>
+        <th>game_id</th><th>sha256</th><th>actions</th>
       </tr></thead><tbody></tbody></table></div>
     </section>
+
     <section id="tab-routing" class="tab-pane hidden">
-      <h2>Aliases, ROM SHA1, Tombstones</h2>
-      <pre id="routing-json" class="json"></pre>
+      <h2>Index routing</h2>
+      <p class="hint">Map legacy aliases, ROM SHA-1 keys, and tombstones to canonical <code>game_id</code> values. <strong>Save routing</strong> replaces all three maps on the server.</p>
+      <div class="routing-toolbar">
+        <button type="button" id="btn-save-routing" class="btn-primary">Save routing</button>
+        <span id="routing-msg" class="msg"></span>
+      </div>
+      <div class="card routing-section">
+        <div class="card-header">Aliases</div>
+        <p class="hint routing-subhint">Legacy or alternate id → canonical <code>game_id</code></p>
+        <div class="table-wrap routing-table-wrap">
+          <table class="routing-table">
+            <thead><tr><th>From</th><th>To (canonical)</th><th class="routing-th-actions"></th></tr></thead>
+            <tbody id="routing-tbody-aliases"></tbody>
+          </table>
+        </div>
+        <button type="button" class="routing-add" data-routing-kind="aliases">Add row</button>
+      </div>
+      <div class="card routing-section">
+        <div class="card-header">ROM SHA-1</div>
+        <p class="hint routing-subhint">40 hex characters → canonical <code>game_id</code></p>
+        <div class="table-wrap routing-table-wrap">
+          <table class="routing-table">
+            <thead><tr><th>ROM SHA-1</th><th>To (canonical)</th><th class="routing-th-actions"></th></tr></thead>
+            <tbody id="routing-tbody-rom"></tbody>
+          </table>
+        </div>
+        <button type="button" class="routing-add" data-routing-kind="rom">Add row</button>
+      </div>
+      <div class="card routing-section">
+        <div class="card-header">Tombstones</div>
+        <p class="hint routing-subhint">Retired id → canonical <code>game_id</code> (merge path)</p>
+        <div class="table-wrap routing-table-wrap">
+          <table class="routing-table">
+            <thead><tr><th>Retired id</th><th>To (canonical)</th><th class="routing-th-actions"></th></tr></thead>
+            <tbody id="routing-tbody-tomb"></tbody>
+          </table>
+        </div>
+        <button type="button" class="routing-add" data-routing-kind="tomb">Add row</button>
+      </div>
     </section>
+
     <section id="tab-slot" class="tab-pane hidden">
       <h2>Delta slot map</h2>
       <p id="slot-meta" class="hint"></p>
-      <pre id="slot-json" class="json"></pre>
+      <div class="card">
+        <div class="card-header">JSON</div>
+        <pre id="slot-json" class="json"></pre>
+      </div>
     </section>
+
     <section id="tab-actions" class="tab-pane hidden">
       <h2>Actions</h2>
-      <p class="hint">Destructive operations require typing the exact <code>game_id</code>.</p>
+      <p class="hint">Destructive steps require typing the exact <code>game_id</code> twice for delete.</p>
       <div class="action-row">
-        <button type="button" id="btn-dropbox">Run Dropbox sync once</button>
+        <button type="button" id="btn-dropbox" class="btn-primary">Run Dropbox sync once</button>
         <span id="dropbox-msg" class="msg"></span>
       </div>
       <div class="action-row">
-        <label>Resolve conflict for <input type="text" id="resolve-id" placeholder="game_id" /></label>
-        <button type="button" id="btn-resolve">POST resolve</button>
+        <label>Resolve conflict <input type="text" id="resolve-id" placeholder="game_id" autocomplete="off" /></label>
+        <button type="button" id="btn-resolve" class="btn-primary">Resolve</button>
         <span id="resolve-msg" class="msg"></span>
       </div>
       <div class="action-row">
-        <label>Delete save <input type="text" id="delete-id" placeholder="game_id" /></label>
-        <label>Confirm <input type="text" id="delete-confirm" placeholder="type game_id again" /></label>
-        <button type="button" id="btn-delete" class="danger">DELETE</button>
+        <label>Delete save <input type="text" id="delete-id" placeholder="game_id" autocomplete="off" /></label>
+        <label>Confirm <input type="text" id="delete-confirm" placeholder="type game_id again" autocomplete="off" /></label>
+        <button type="button" id="btn-delete" class="danger">Delete</button>
         <span id="delete-msg" class="msg"></span>
       </div>
     </section>
   </main>
 
   <p id="global-msg" class="msg center"></p>
-  <script src="app.js"></script>
+
+  <div id="history-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="history-modal-title">
+    <div class="modal-backdrop" aria-hidden="true"></div>
+    <div class="modal-panel modal-panel--history">
+      <h3 id="history-modal-title">History</h3>
+      <div class="history-entries-scroll">
+        <div id="history-entries" class="history-entries" role="list"></div>
+      </div>
+      <p class="hint history-modal-hint">Restoring sets that revision as the active server save; the current file is archived first. <strong>Keep</strong> pins a backup so it is not deleted when history exceeds the max count. <strong>Modified</strong> is from the file on disk; <strong>Index time</strong> is the server’s index timestamp when that backup was created (from the filename).</p>
+      <button type="button" id="history-close">Done</button>
+    </div>
+  </div>
+
+  <script src="app.js?v=3"></script>
 </body>
 </html>

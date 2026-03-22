@@ -40,6 +40,7 @@ struct SaveMeta {
   std::string server_updated_at;
   std::string sha256;
   std::string filename_hint;
+  std::string display_name;
 };
 
 struct LocalSave {
@@ -550,37 +551,297 @@ static std::map<std::string, SaveMeta> parse_saves_json(const std::string& json)
     const auto gstart = gid + 11;
     const auto gend = json.find('"', gstart);
     if (gend == std::string::npos) break;
+    const auto next_gid = json.find("\"game_id\":\"", gend + 1);
+    const size_t win_end = (next_gid == std::string::npos) ? json.size() : next_gid;
     SaveMeta meta{};
     meta.game_id = json.substr(gstart, gend - gstart);
+    const std::string chunk = json.substr(gend, win_end - gend);
 
-    const auto ts = json.find("\"last_modified_utc\":\"", gend);
+    const auto ts = chunk.find("\"last_modified_utc\":\"");
     if (ts != std::string::npos) {
       const auto tstart = ts + 21;
-      const auto tend = json.find('"', tstart);
-      if (tend != std::string::npos) meta.last_modified_utc = json.substr(tstart, tend - tstart);
+      const auto tend = chunk.find('"', tstart);
+      if (tend != std::string::npos) meta.last_modified_utc = chunk.substr(tstart, tend - tstart);
     }
-    const auto su = json.find("\"server_updated_at\":\"", gend);
+    const auto su = chunk.find("\"server_updated_at\":\"");
     if (su != std::string::npos) {
       const auto sstart = su + 21;
-      const auto send = json.find('"', sstart);
-      if (send != std::string::npos) meta.server_updated_at = json.substr(sstart, send - sstart);
+      const auto send = chunk.find('"', sstart);
+      if (send != std::string::npos) meta.server_updated_at = chunk.substr(sstart, send - sstart);
     }
-    const auto sh = json.find("\"sha256\":\"", gend);
+    const auto sh = chunk.find("\"sha256\":\"");
     if (sh != std::string::npos) {
       const auto sstart = sh + 10;
-      const auto send = json.find('"', sstart);
-      if (send != std::string::npos) meta.sha256 = json.substr(sstart, send - sstart);
+      const auto send = chunk.find('"', sstart);
+      if (send != std::string::npos) meta.sha256 = chunk.substr(sstart, send - sstart);
     }
-    const auto fh = json.find("\"filename_hint\":\"", gend);
+    const auto fh = chunk.find("\"filename_hint\":\"");
     if (fh != std::string::npos) {
       const auto fstart = fh + 17;
-      const auto fend = json.find('"', fstart);
-      if (fend != std::string::npos) meta.filename_hint = json.substr(fstart, fend - fstart);
+      const auto fend = chunk.find('"', fstart);
+      if (fend != std::string::npos) meta.filename_hint = chunk.substr(fstart, fend - fstart);
+    }
+    const auto dn = chunk.find("\"display_name\":\"");
+    if (dn != std::string::npos) {
+      const auto dstart = dn + 16;
+      const auto dend = chunk.find('"', dstart);
+      if (dend != std::string::npos) meta.display_name = chunk.substr(dstart, dend - dstart);
     }
     out[meta.game_id] = meta;
-    pos = gend + 1;
+    pos = win_end;
   }
   return out;
+}
+
+struct HistoryEntryParsed {
+  std::string filename;
+  std::string modified_utc;
+  std::string display_name;
+  /** Index timestamp from backup filename (server_updated_at or last_modified_utc at archive time); matches admin "Index time". */
+  std::string indexed_at_utc;
+  /** Preformatted UTC 12h from server (optional). */
+  std::string time_display;
+  bool keep = false;
+};
+
+static std::vector<HistoryEntryParsed> parse_history_json(const std::string& json) {
+  std::vector<HistoryEntryParsed> out;
+  size_t pos = 0;
+  while (true) {
+    const auto fn_pos = json.find("\"filename\":\"", pos);
+    if (fn_pos == std::string::npos) break;
+    const auto next_fn = json.find("\"filename\":\"", fn_pos + 14);
+    const size_t chunk_end = (next_fn == std::string::npos) ? json.size() : next_fn;
+    HistoryEntryParsed row;
+    {
+      const auto s = fn_pos + 12;
+      const auto e = json.find('"', s);
+      if (e == std::string::npos) break;
+      row.filename = json.substr(s, e - s);
+    }
+    const std::string chunk = json.substr(fn_pos, chunk_end - fn_pos);
+    {
+      const auto m = chunk.find("\"modified_utc\":\"");
+      if (m != std::string::npos) {
+        const size_t ss = m + 16;
+        const auto ee = chunk.find('"', ss);
+        if (ee != std::string::npos) row.modified_utc = chunk.substr(ss, ee - ss);
+      }
+    }
+    if (chunk.find("\"display_name\":null") == std::string::npos) {
+      const auto d = chunk.find("\"display_name\":\"");
+      if (d != std::string::npos) {
+        const size_t ss = d + 16;
+        const auto ee = chunk.find('"', ss);
+        if (ee != std::string::npos) row.display_name = chunk.substr(ss, ee - ss);
+      }
+    }
+    if (chunk.find("\"indexed_at_utc\":null") == std::string::npos) {
+      const auto ix = chunk.find("\"indexed_at_utc\":\"");
+      if (ix != std::string::npos) {
+        const size_t ss = ix + 18;
+        const auto ee = chunk.find('"', ss);
+        if (ee != std::string::npos) row.indexed_at_utc = chunk.substr(ss, ee - ss);
+      }
+    }
+    if (chunk.find("\"time_display\":null") == std::string::npos) {
+      const auto td = chunk.find("\"time_display\":\"");
+      if (td != std::string::npos) {
+        const size_t ss = td + 16;
+        const auto ee = chunk.find('"', ss);
+        if (ee != std::string::npos) row.time_display = chunk.substr(ss, ee - ss);
+      }
+    }
+    {
+      const auto kpos = chunk.find("\"keep\"");
+      if (kpos != std::string::npos) {
+        const auto colon = chunk.find(':', kpos);
+        if (colon != std::string::npos) {
+          size_t n = colon + 1;
+          while (n < chunk.size() && (chunk[n] == ' ' || chunk[n] == '\t')) {
+            n++;
+          }
+          if (chunk.compare(n, 4, "true") == 0) {
+            row.keep = true;
+          }
+        }
+      }
+    }
+    out.push_back(std::move(row));
+    pos = chunk_end;
+  }
+  return out;
+}
+
+
+static bool history_restore_switch(const Config& cfg, const std::string& game_id, const std::string& filename) {
+  std::string body = "{\"filename\":\"";
+  body += filename;
+  body += "\"}";
+  std::vector<unsigned char> body_bytes(body.begin(), body.end());
+  int status = 0;
+  std::vector<unsigned char> resp;
+  const std::string path = "/save/" + game_id + "/restore";
+  return http_request(cfg, "POST", path, body_bytes, status, resp, "application/json") && status == 200;
+}
+
+static std::string json_quote_string_switch(const std::string& s) {
+  std::string o;
+  o.reserve(s.size() + 2);
+  o += '"';
+  for (unsigned char c : s) {
+    if (c == '"' || c == '\\') o += '\\';
+    if (c < 32 || c > 126) {
+      return "";
+    }
+    o += static_cast<char>(c);
+  }
+  o += '"';
+  return o;
+}
+
+static bool history_keep_switch(const Config& cfg, const std::string& game_id, const std::string& filename, bool keep) {
+  if (filename.empty()) return false;
+  const std::string q = json_quote_string_switch(filename);
+  if (q.empty()) return false;
+  std::string body = "{\"filename\":";
+  body += q;
+  body += ",\"keep\":";
+  body += keep ? "true" : "false";
+  body += "}";
+  std::vector<unsigned char> body_bytes(body.begin(), body.end());
+  int status = 0;
+  std::vector<unsigned char> resp;
+  const std::string path = "/save/" + game_id + "/history/revision/keep";
+  return http_request(cfg, "PATCH", path, body_bytes, status, resp, "application/json") && status == 200;
+}
+
+static bool save_history_picker_switch(PadState* pad, Config& cfg, const std::string& game_id) {
+  const std::string path = "/save/" + game_id + "/history";
+  int status = 0;
+  std::vector<unsigned char> body;
+  if (!http_request(cfg, "GET", path, {}, status, body) || status != 200) {
+    consoleClear();
+    printf("History: GET failed (HTTP %d)\n", status > 0 ? status : 0);
+    printf("B: back\n");
+    consoleUpdate(NULL);
+    while (appletMainLoop()) {
+      padUpdate(pad);
+      if (padGetButtonsDown(pad) & HidNpadButton_B) return true;
+      consoleUpdate(NULL);
+    }
+    return false;
+  }
+  const std::string json(body.begin(), body.end());
+  std::vector<HistoryEntryParsed> rows = parse_history_json(json);
+  if (rows.empty()) {
+    consoleClear();
+    printf("No history backups for this game.\n");
+    printf("B: back\n");
+    consoleUpdate(NULL);
+    while (appletMainLoop()) {
+      padUpdate(pad);
+      if (padGetButtonsDown(pad) & HidNpadButton_B) return true;
+      consoleUpdate(NULL);
+    }
+    return false;
+  }
+
+  int cursor = 0;
+  int scroll = 0;
+  constexpr int kVisibleEntries = 8;
+  const int total = static_cast<int>(rows.size());
+  bool dirty = true;
+  while (appletMainLoop()) {
+    padUpdate(pad);
+    const u64 down = padGetButtonsDown(pad);
+    if (down & HidNpadButton_B) return true;
+    if (down & HidNpadButton_R) {
+      const size_t ci = static_cast<size_t>(cursor);
+      const bool nk = !rows[ci].keep;
+      if (history_keep_switch(cfg, game_id, rows[ci].filename, nk)) {
+        rows[ci].keep = nk;
+        dirty = true;
+      }
+      continue;
+    }
+    if (down & HidNpadButton_A) {
+      const HistoryEntryParsed& ent = rows[static_cast<size_t>(cursor)];
+      const std::string& fn = ent.filename;
+      consoleClear();
+      printf("Restore this version?\n");
+      if (!ent.display_name.empty()) printf("Label: %s\n", ent.display_name.c_str());
+      printf("Keep: %s\n", ent.keep ? "yes" : "no");
+      printf("File: %s\n", fn.c_str());
+      printf("A: confirm  B: cancel\n");
+      consoleUpdate(NULL);
+      while (appletMainLoop()) {
+        padUpdate(pad);
+        const u64 d2 = padGetButtonsDown(pad);
+        if (d2 & HidNpadButton_B) break;
+        if (d2 & HidNpadButton_A) {
+          if (history_restore_switch(cfg, game_id, fn)) {
+            printf("Restored. Download this game to update device.\n");
+          } else {
+            printf("Restore failed.\n");
+          }
+          printf("B: back\n");
+          consoleUpdate(NULL);
+          while (appletMainLoop()) {
+            padUpdate(pad);
+            if (padGetButtonsDown(pad) & HidNpadButton_B) return true;
+            consoleUpdate(NULL);
+          }
+          return true;
+        }
+        consoleUpdate(NULL);
+      }
+      dirty = true;
+      continue;
+    }
+    if (down & HidNpadButton_Up) {
+      cursor = (cursor + total - 1) % total;
+      dirty = true;
+    }
+    if (down & HidNpadButton_Down) {
+      cursor = (cursor + 1) % total;
+      dirty = true;
+    }
+    if (cursor < scroll) scroll = cursor;
+    if (cursor >= scroll + kVisibleEntries) scroll = cursor - kVisibleEntries + 1;
+    if (scroll < 0) scroll = 0;
+    const int max_scroll = std::max(0, total - kVisibleEntries);
+    if (scroll > max_scroll) scroll = max_scroll;
+
+    if (!dirty) {
+      consoleUpdate(NULL);
+      continue;
+    }
+
+    consoleClear();
+    printf("--- History ---\n");
+    printf("\n");
+    {
+      constexpr int kMenuLeftCol = 22;
+      printf("%-*s%s\n", kMenuLeftCol, "UP/DOWN: move", "");
+      printf("%-*s%s\n", kMenuLeftCol, "A: restore", "");
+      printf("%-*s%s\n", kMenuLeftCol, "R: keep / unkeep", "");
+      printf("%-*s%s\n", kMenuLeftCol, "B: back", "");
+    }
+    printf("\n");
+    for (int row = scroll; row < std::min(scroll + kVisibleEntries, total); row++) {
+      const char mark = (row == cursor) ? '>' : ' ';
+      const HistoryEntryParsed& r = rows[static_cast<size_t>(row)];
+      std::string lbl = r.display_name.empty() ? "-" : r.display_name;
+      if (lbl.size() > 44) lbl = lbl.substr(0, 41) + "...";
+      printf("%c%s%s\n", mark, r.keep ? "[KEEP] " : "", lbl.c_str());
+      printf("  %.48s\n", r.filename.c_str());
+      printf("\n");
+    }
+    dirty = false;
+    consoleUpdate(NULL);
+  }
+  return false;
 }
 
 static std::string mtime_to_utc_iso(time_t mtime) {
@@ -1524,6 +1785,11 @@ static void save_viewer_switch(PadState* pad, Config& cfg) {
     padUpdate(pad);
     const u64 down = padGetButtonsDown(pad);
     if (down & HidNpadButton_B) return;
+    if (down & HidNpadButton_A) {
+      const std::string& gid = merge_ids[static_cast<size_t>(cursor)];
+      (void)save_history_picker_switch(pad, cfg, gid);
+      dirty = true;
+    }
     if (down & HidNpadButton_R) {
       const std::string& gid = merge_ids[static_cast<size_t>(cursor)];
       const std::string lk = to_lower(gid);
@@ -1560,6 +1826,7 @@ static void save_viewer_switch(PadState* pad, Config& cfg) {
     {
       constexpr int kMenuLeftCol = 22;
       printf("%-*s%s\n", kMenuLeftCol, "UP/DOWN: move", "");
+      printf("%-*s%s\n", kMenuLeftCol, "A: history / restore", "");
       printf("%-*s%s\n", kMenuLeftCol, "R: toggle lock -> config", "");
       printf("%-*s%s\n", kMenuLeftCol, "B: back", "");
     }
@@ -1569,7 +1836,15 @@ static void save_viewer_switch(PadState* pad, Config& cfg) {
       const std::string& id = merge_ids[static_cast<size_t>(row)];
       const std::string lk = to_lower(id);
       const char* tag = cfg.locked_ids.count(lk) ? "[L]" : "   ";
-      printf("%c%s %.28s\n", mark, tag, id.c_str());
+      const auto it = remote.find(id);
+      const char* disp = id.c_str();
+      std::string disp_buf;
+      if (it != remote.end() && !it->second.display_name.empty()) {
+        disp_buf = it->second.display_name;
+        disp = disp_buf.c_str();
+      }
+      printf("%c%s %.28s\n", mark, tag, disp);
+      printf("\n");
     }
     dirty = false;
     consoleUpdate(NULL);

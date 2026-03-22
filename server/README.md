@@ -23,6 +23,15 @@ FastAPI backend for binary save storage and metadata coordination.
 - `DELETE /save/{game_id}` — remove index row and delete the stored blob (cleanup / bad test data)
 - `POST /resolve/{game_id}`
 
+## Save history (when `ENABLE_VERSION_HISTORY=true`)
+
+- `GET /save/{game_id}/history` — list backup revisions (includes **`keep`** pin state and optional **`display_name`** per revision when labels exist).
+- `POST /save/{game_id}/restore` — restore the active save from a named history file (server-side only).
+- `PATCH /save/{game_id}/history/revision/keep` — pin or unpin a history file (`filename`, `keep`); pinned files are stored in **`pins.json`** under that game’s history directory and are **not** trimmed first when enforcing **`HISTORY_MAX_VERSIONS_PER_GAME`**.
+- `PATCH /save/{game_id}/meta` — optional **`display_name`** for the main index row (friendly label).
+
+See **`docs/USER_GUIDE.md`** for retention behavior and console flows.
+
 ## Admin web UI (optional)
 
 When `GBASYNC_ADMIN_PASSWORD` is set, open **`http://<host>:8080/admin`** (redirects to `/admin/ui/`). Log in with that password, or call `/admin/api/*` with **`X-API-Key`** (same as the main API) instead of a browser session. If the password env var is unset, admin routes return **404** (disabled).

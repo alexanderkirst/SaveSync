@@ -50,7 +50,13 @@ Use this checklist for real-device validation on Switch + 3DS + Delta.
 - [ ] Check `GET /conflicts` for expected flag
 - [ ] Resolve via `POST /resolve/{game_id}` and re-validate final state
 
-## Stage 6 - Regression checks
+## Stage 6 - Save history + labels (optional)
+
+- [ ] Set a **Display name** in admin (or `PATCH /save/{game_id}/meta`); confirm **Switch/3DS** save viewer shows it instead of raw **`game_id`**
+- [ ] Upload a second time for the same game so a history backup exists; open **Save viewer → A** (history); **R** toggles **keep**; confirm **`[KEEP]`** and that pinned rows survive trimming under **`HISTORY_MAX_VERSIONS_PER_GAME`**
+- [ ] Restore a history revision on the server; run **download** or **Auto** on a console and confirm the handheld matches
+
+## Stage 7 - Regression checks
 
 - [ ] Optional: remove a test `game_id` with `DELETE /save/{game_id}` and confirm it disappears from `GET /saves`
 - [ ] Restart server and verify data persists

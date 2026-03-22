@@ -50,6 +50,33 @@ Release focused on **homebrew console clients** (Switch + 3DS), a first **admin 
 
 ---
 
+## Save history, keep pins, and display names (server + admin + consoles)
+
+These features shipped in the same release cycle as the v0.1.6 console work (current `main`).
+
+### Server
+
+- **`HISTORY_MAX_VERSIONS_PER_GAME`** caps how many backup `*.sav` files are kept per game under **`HISTORY_ROOT/{game_id}/`**. When trimming, **pinned** revisions are kept first — the cap applies to **unpinned** files only (oldest unpinned backups are removed).
+- Per-game **`pins.json`** records which history filenames are **kept** (pinned).
+- **`GET /save/{game_id}/history`** lists entries with optional **`keep`**, **`display_name`** (revision label), and metadata needed for restore.
+- **`PATCH /save/{game_id}/history/revision/keep`** — JSON body `filename` + `keep` (same behavior as the admin API below).
+- **`PATCH /save/{game_id}/meta`** — optional **`display_name`** for the main index row (friendly label; does **not** change canonical **`game_id`**).
+
+### Admin web UI
+
+- **Display name** — main save label in the index (vs **Rev label** for a single history revision).
+- **History** sheet per save: list revisions, **Keep** toggle, restore — see **`admin-web/README.md`**.
+- Admin routes mirror the public API for history keep and revision labels where applicable.
+
+### Switch + 3DS
+
+- **Save viewer** primary line: shows the server **`display_name`** when set; otherwise the **`game_id`** (same idea as the admin **Display name** field).
+- **A** on a row: **history / restore** — list revisions (**label + filename**; 3DS avoids extra timestamp clutter on the small screen); **R** toggles **keep / unkeep**; **Y** or confirm runs **server-side restore** (pull to the device afterward with download or Auto so local `.sav` matches).
+- Pinned rows show a **`[KEEP]`** prefix; **blank lines** between rows in the save viewer and history lists for readability.
+- **3DS:** history parsing uses **heap-backed** row storage and bounded JSON parsing so large histories do not overflow the default thread stack.
+
+---
+
 ## Artifacts (typical layout)
 
 Built with:

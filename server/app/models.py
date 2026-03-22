@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def utc_now_iso() -> str:
@@ -9,6 +9,8 @@ def utc_now_iso() -> str:
 
 
 class SaveMeta(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     game_id: str
     last_modified_utc: str = Field(default_factory=utc_now_iso)
     server_updated_at: str | None = None
@@ -19,6 +21,7 @@ class SaveMeta(BaseModel):
     filename_hint: str | None = None
     platform_source: str | None = None
     conflict: bool = False
+    display_name: str | None = Field(default=None, max_length=128)
 
     @field_validator("game_id")
     @classmethod
@@ -42,6 +45,8 @@ class SaveMeta(BaseModel):
 
 
 class SaveListItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     game_id: str
     last_modified_utc: str
     server_updated_at: str | None = None
@@ -52,7 +57,81 @@ class SaveListItem(BaseModel):
     filename_hint: str | None = None
     platform_source: str | None = None
     conflict: bool = False
+    display_name: str | None = None
+
+
+class HistoryEntry(BaseModel):
+    filename: str
+    size_bytes: int
+    modified_utc: str
+    display_name: str | None = None
+    # ISO timestamp from index metadata when this backup was written (filename prefix; see storage._backup_existing)
+    indexed_at_utc: str | None = None
+    # Preformatted UTC 12h string for clients (same instant as indexed_at_utc or modified_utc)
+    time_display: str | None = None
+    # Pinned revisions are never deleted when trimming to HISTORY_MAX_VERSIONS_PER_GAME (unpinned pool is trimmed).
+    keep: bool = False
+
+
+class HistoryListResponse(BaseModel):
+    entries: list[HistoryEntry]
+
+
+class RestoreRequest(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=512)
+
+    @field_validator("filename")
+    @classmethod
+    def filename_basename_only(cls, value: str) -> str:
+        v = value.strip()
+        if not v or "/" in v or "\\" in v or v.startswith(".") or ".." in v:
+            raise ValueError("filename must be a plain basename")
+        return v
+
+
+class DisplayNamePatch(BaseModel):
+    display_name: str | None = Field(None, max_length=128)
+
+
+class RevisionLabelPatch(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=512)
+    display_name: str | None = Field(None, max_length=128)
+
+    @field_validator("filename")
+    @classmethod
+    def filename_basename_only(cls, value: str) -> str:
+        v = value.strip()
+        if not v or "/" in v or "\\" in v or v.startswith(".") or ".." in v:
+            raise ValueError("filename must be a plain basename")
+        return v
+
+
+class RevisionKeepPatch(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=512)
+    keep: bool = False
+
+    @field_validator("filename")
+    @classmethod
+    def filename_basename_only(cls, value: str) -> str:
+        v = value.strip()
+        if not v or "/" in v or "\\" in v or v.startswith(".") or ".." in v:
+            raise ValueError("filename must be a plain basename")
+        return v
 
 
 class SaveListResponse(BaseModel):
     saves: list[SaveListItem]
+
+
+class AdminSettingsPatch(BaseModel):
+    """Runtime settings the admin UI can change (in-memory until process restart for some env-backed defaults)."""
+
+    history_max_versions_per_game: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class IndexRoutingPut(BaseModel):
+    """Replace index routing maps (aliases, ROM SHA-1 → canonical, tombstones)."""
+
+    aliases: dict[str, str] = Field(default_factory=dict)
+    rom_sha1: dict[str, str] = Field(default_factory=dict)
+    tombstones: dict[str, str] = Field(default_factory=dict)

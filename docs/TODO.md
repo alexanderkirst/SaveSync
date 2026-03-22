@@ -4,6 +4,7 @@
 
 ## Recently completed (sync UX + server)
 
+- **Save history (server + admin + consoles):** **`HISTORY_MAX_VERSIONS_PER_GAME`** retention with **keep pins** — `pins.json` per game; trim removes **unpinned** oldest files first so pinned backups are not counted toward the cap. **`GET /save/{game_id}/history`**, **`POST /save/{game_id}/restore`**, **`PATCH .../history/revision/keep`**. Admin: **Display name** vs **Rev label**, history sheet with **Keep** + restore. **Switch + 3DS:** save viewer **A** → history list; **R** keep/unkeep; **`[KEEP]`** prefix; server restore then user downloads locally; **save viewer** shows **`display_name`** instead of **`game_id`** when set; blank lines between rows; **3DS** history uses heap-backed rows (stack overflow fix).
 - **Auto (full) sync** on Switch and 3DS driven by **SHA-256** and per-device **`.gbasync-baseline`** (legacy **`.savesync-baseline`** still supported; not unreliable SD mtimes for merge decisions).
 - **Conflict screens** on both consoles: **X** push local (force), **Y** pull server, **B** skip.
 - **HTTP hardening** on console clients (e.g. chunked decode, `Accept-Encoding: identity`, tolerant server JSON).
@@ -64,15 +65,13 @@ _(Done — see **Recently completed**.)_
 
 ### Medium effort
 
-- **Per-game sync policy:** per title options like upload-only / download-only / skip / lock to avoid accidental overwrites.
 - **Actionable conflict details:** show both timestamps/source labels on conflict choices (push local / pull server / skip).
 - **Server auto-discovery on LAN (optional):** mDNS/Bonjour or quick subnet probe to avoid manual IP entry.
 
 ### Longer-term
 
-- **Admin web panel — extensions:** richer operations on top of the shipped **`admin-web/`** UI (e.g. history browse/restore, bulk actions, deeper diagnostics) — baseline tabs/actions are **done** (see **Recently completed** § Admin web UI).
 - **Profiles / namespaces:** multiple API keys or save namespaces for shared households/devices.
-- **History restore UX:** browse server history snapshots and restore a selected prior version. configure how many of previous old saves to hold on to and swap back to them.
+- **History UX polish:** richer on-device conflict of “local vs restored server snapshot” (today: restore on server; user runs download/Auto to align the handheld).
 
 ### Maybe do
 - **One-tap diagnostics export:** write redacted logs + config summary + app/server version to a text file for support.

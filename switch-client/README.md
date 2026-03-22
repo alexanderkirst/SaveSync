@@ -12,7 +12,7 @@ Nintendo Switch homebrew sync client using libnx and socket-based HTTP.
    - `GET /save/{game_id}` (+ `/meta`)
    - `PUT /save/{game_id}` (`force=1` on uploads from this client)
 5. **Auto (A):** If the plan has **no** upload/download/skip-no-baseline/conflict work (only OK and/or locked rows), the app **skips the preview** and prints **Already Up To Date** once (no per-game `OK` lines), then the post-sync menu. Otherwise **preview** lists per-game actions, then **A** runs / **B** cancels; baseline **`.gbasync-baseline`** + SHA-256 (legacy **`.savesync-baseline`** supported); first-run **SKIP** until X/Y seeds baseline; **Conflict** UI (X/Y/B) during apply
-6. **Save viewer:** main menu **R** lists local + server `game_id`s; **R** toggles lock; **B** back (sync **preview** is confirm-only — no lock toggle on preview)
+6. **Save viewer:** main menu **R** lists local + server ids (server **display_name** when set, else **`game_id`**); **R** toggles lock; **A** history / restore (**R** in history = keep/unkeep); **B** back (sync **preview** is confirm-only — no lock toggle on preview)
 7. **Upload (X)** / **download (Y)** pickers with checklist; **+** runs, **B** back
 8. **Status line** on main menu (last sync / server / Dropbox) persisted in **`.gbasync-status`** next to the baseline file
 9. Optional **`sync.locked_ids`** — comma-separated `game_id` list skipped on Auto; **R** toggles lock in **Save viewer** (main menu **R**) and **writes `config.ini`** (same path as at launch: `sdmc:/switch/gba-sync/config.ini`)

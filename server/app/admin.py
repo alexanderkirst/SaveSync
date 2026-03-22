@@ -12,8 +12,19 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
+
+from .models import (
+    AdminSettingsPatch,
+    DisplayNamePatch,
+    HistoryEntry,
+    HistoryListResponse,
+    IndexRoutingPut,
+    RestoreRequest,
+    RevisionKeepPatch,
+    RevisionLabelPatch,
+)
 
 _log = logging.getLogger("gbasync.admin")
 
@@ -143,6 +154,9 @@ def admin_dashboard(_: AdminDep, request: Request) -> dict[str, Any]:
         "index_path": str(store.index_path),
         "save_root": str(store.save_root),
         "history_root": str(store.history_root),
+        "history_max_versions_per_game": store.history_max_per_game,
+        "summary": f"{len(saves)} save(s), {len(conflicts)} conflict(s), Dropbox mode={mode!r}, "
+        f"keep up to {store.history_max_per_game or 'unlimited'} history file(s) per game.",
     }
 
 
@@ -155,6 +169,32 @@ def admin_index_state(_: AdminDep, request: Request) -> dict[str, Any]:
         "rom_sha1": routing["rom_sha1"],
         "tombstones": routing["tombstones"],
     }
+
+
+@router.patch("/api/settings")
+def admin_patch_settings(_: AdminDep, request: Request, body: AdminSettingsPatch) -> JSONResponse:
+    store = _get_store(request)
+    if body.history_max_versions_per_game is not None:
+        try:
+            store.set_history_max_per_game(body.history_max_versions_per_game)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    _log.info("admin settings history_max=%s", store.history_max_per_game)
+    return JSONResponse(
+        status_code=200,
+        content={"ok": True, "history_max_versions_per_game": store.history_max_per_game},
+    )
+
+
+@router.put("/api/index-routing")
+def admin_put_index_routing(_: AdminDep, request: Request, body: IndexRoutingPut) -> JSONResponse:
+    store = _get_store(request)
+    try:
+        store.replace_routing_maps(body.aliases, body.rom_sha1, body.tombstones)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    _log.info("admin replace_routing_maps")
+    return JSONResponse(status_code=200, content={"ok": True})
 
 
 @router.get("/api/slot-map")
@@ -178,6 +218,94 @@ def admin_list_saves(_: AdminDep, request: Request) -> dict[str, Any]:
 
     store = _get_store(request)
     return SaveListResponse(saves=store.list_saves()).model_dump()
+
+
+@router.get("/api/save/{game_id}/download")
+def admin_download_save(_: AdminDep, request: Request, game_id: str) -> Response:
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+    store = _get_store(request)
+    data = store.get_bytes(game_id)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Save not found")
+    safe = game_id.replace('"', "")
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{safe}.sav"'},
+    )
+
+
+@router.get("/api/save/{game_id}/history")
+def admin_save_history(_: AdminDep, request: Request, game_id: str) -> dict[str, Any]:
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+    store = _get_store(request)
+    raw = store.list_history(game_id)
+    return HistoryListResponse(entries=[HistoryEntry(**e) for e in raw]).model_dump()
+
+
+@router.post("/api/save/{game_id}/restore")
+def admin_restore_history(_: AdminDep, request: Request, game_id: str, body: RestoreRequest) -> JSONResponse:
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+    store = _get_store(request)
+    try:
+        effective = store.restore_from_history(game_id, body.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    from . import main as main_mod
+
+    if main_mod._dropbox_sync_on_upload_enabled():
+        main_mod._schedule_dropbox_sync_after_upload()
+    _log.info("admin restore_from_history game_id=%s filename=%s", game_id, body.filename)
+    return JSONResponse(
+        status_code=200,
+        content={"ok": True, "effective_meta": effective.model_dump()},
+    )
+
+
+@router.patch("/api/save/{game_id}/history/revision")
+def admin_patch_history_revision(_: AdminDep, request: Request, game_id: str, body: RevisionLabelPatch) -> JSONResponse:
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+    store = _get_store(request)
+    try:
+        ok = store.set_history_revision_display_name(game_id, body.filename, body.display_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="save or history file not found")
+    _log.info("admin set_history_revision_display_name game_id=%s filename=%s", game_id, body.filename)
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
+@router.patch("/api/save/{game_id}/history/revision/keep")
+def admin_patch_history_keep(_: AdminDep, request: Request, game_id: str, body: RevisionKeepPatch) -> JSONResponse:
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+    store = _get_store(request)
+    try:
+        ok = store.set_history_revision_keep(game_id, body.filename, body.keep)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="save or history file not found")
+    _log.info("admin set_history_revision_keep game_id=%s filename=%s keep=%s", game_id, body.filename, body.keep)
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
+@router.patch("/api/save/{game_id}/meta")
+def admin_patch_save_meta(_: AdminDep, request: Request, game_id: str, body: DisplayNamePatch) -> JSONResponse:
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+    store = _get_store(request)
+    if not store.set_display_name(game_id, body.display_name):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Save not found")
+    _log.info("admin set_display_name game_id=%s", game_id)
+    return JSONResponse(status_code=200, content={"ok": True})
 
 
 @router.get("/api/conflicts")

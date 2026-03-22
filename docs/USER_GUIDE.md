@@ -19,6 +19,14 @@ docker compose up -d
 
 Saves and the metadata index are stored on the host under **`save_data/`** at the **repository root** (for example `save_data/saves/*.sav` and `save_data/index.json`), bind-mounted into the container—not under `server/`.
 
+**Save history (per game):** With **`ENABLE_VERSION_HISTORY=true`**, each time the server replaces a save file, the previous blob is copied under **`save_data/history/{game_id}/`**. **`HISTORY_MAX_VERSIONS_PER_GAME`** (default **5** in Docker Compose; **`0`** = unlimited) caps how many backup files are kept per game. **Pinned** revisions (see below) are **not** counted toward that cap — when trimming, the server drops **unpinned** oldest files first and keeps **`pins.json`** in sync.
+
+List or restore with **`GET /save/{game_id}/history`** and **`POST /save/{game_id}/restore`**, from the **admin** UI (**History** on a row), or from the **homebrew save viewer** (**A** = history / restore). On **Switch** and **3DS** history screens, **R** toggles **keep** (pinned) for the highlighted revision (`PATCH /save/{game_id}/history/revision/keep`); pinned rows show **`[KEEP]`**. Restoring changes the **server** copy only; run **download** (or Auto) on each device afterward so local `.sav` files match, or the next upload may overwrite the restored server file.
+
+**Revision labels:** Optional per-backup names are stored in **`save_data/history/{game_id}/labels.json`**. Set from admin (**Rev label** in the history sheet) or **`PATCH /save/{game_id}/history/revision`** with `filename` + `display_name`. Listed in **`GET /save/{game_id}/history`** as **`display_name`** on each entry (separate from the main save’s display name).
+
+**Display names:** Optional **`display_name`** in the index (set in admin with **Display name**, or **`PATCH /save/{game_id}/meta`**). Returned in **`GET /saves`**. On **Switch** and **3DS** **save viewer** (main menu **R**), the primary line shows **`display_name`** when set, and falls back to **`game_id`** — it does **not** change the canonical **`game_id`** or routing.
+
 **Dropbox in the same container:** set in your **repository-root** `.env`:
 
 - `GBASYNC_DROPBOX_MODE=off` — default; API only.
@@ -175,7 +183,7 @@ Launch from Homebrew Menu.
 
 **Main menu:** **A** Auto sync, **X** upload-only, **Y** download-only, **+** exits the app. A short **status line** shows last sync / server / Dropbox (from **`.gbasync-status`** next to your saves).
 
-**Auto sync** runs a **preview** of planned actions per game (upload/download/skip/conflict/locked — **non-OK rows only**), then **A** applies or **B** returns to the menu (**+** does not cancel on the preview — avoids accidental backs). Preview is **confirm-only** (no lock editing there). Change **locks** from the main menu **Save viewer** (**R**): highlight a row and **R** toggles lock; **`locked_ids=`** is written to `sdmc:/switch/gba-sync/config.ini`.
+**Auto sync** runs a **preview** of planned actions per game (upload/download/skip/conflict/locked — **non-OK rows only**), then **A** applies or **B** returns to the menu (**+** does not cancel on the preview — avoids accidental backs). Preview is **confirm-only** (no lock editing there). Change **locks** from the main menu **Save viewer** (**R**): highlight a row and **R** toggles lock; **`locked_ids=`** is written to `sdmc:/switch/gba-sync/config.ini`. The viewer lists **Display name** when the server has one; otherwise **`game_id`**. **A** opens **history / restore** (**R** in history toggles **keep**).
 
 After logs finish, a **done** screen appears: **A** returns to the main menu; **+** exits the app.
 
@@ -221,7 +229,7 @@ Launch from Homebrew Launcher.
 
 **Main menu:** **A** / **X** / **Y** as labeled; **START** exits to the “Press START to exit” end screen (or exits immediately if you already chose **START** on the post-sync screen). A **status line** shows last sync / server / Dropbox (from **`.gbasync-status`** in the active save folder).
 
-**Auto sync** shows a **preview** of planned actions per game (**non-OK rows only**), then **A** applies or **B** / **START** returns to the menu. Preview is **confirm-only**. **Save viewer** (main menu **R**): **R** toggles lock for the highlighted row and updates **`sdmc:/3ds/gba-sync/config.ini`** (`locked_ids=`).
+**Auto sync** shows a **preview** of planned actions per game (**non-OK rows only**), then **A** applies or **B** / **START** returns to the menu. Preview is **confirm-only**. **Save viewer** (main menu **R**): **R** toggles lock for the highlighted row and updates **`sdmc:/3ds/gba-sync/config.ini`** (`locked_ids=`). Rows show **Display name** when the server has one; otherwise **`game_id`**. **A** opens history (**R** in history toggles **keep**).
 
 After sync logs, a **done** screen appears: **A** returns to the main menu; **START** exits the app (skips the duplicate exit prompt).
 

@@ -102,8 +102,8 @@ Expected files (depending on build):
 4. Build 3DS client
 5. Generate all `dist/` artifacts
 6. Publish release notes with:
-   - API changes (e.g. new **`DELETE /save/{game_id}`**)
-   - console UX (baseline Auto, conflict UI, confirm + post-sync screens)
+   - API changes (e.g. **`DELETE /save/{game_id}`**, save **history** / **restore** / **keep** if applicable)
+   - console UX (baseline Auto, conflict UI, confirm + post-sync screens, save viewer + history)
    - known limitations
    - upgrade steps
 

@@ -7,7 +7,7 @@ Static browser UI for operating a running **GBAsync server** (saves, conflicts, 
 | Area | Purpose |
 |------|--------|
 | **Dashboard** | JSON snapshot: Dropbox mode, save/conflict counts, data paths. |
-| **Saves** | Lists indexed saves with hash preview, size, conflict flag, last modified; quick link to resolve. |
+| **Saves** | Lists indexed saves with hash preview, size, conflict flag, last modified; **Display name** (main label); **History** sheet per row (revision list, **Rev label**, **Keep**, restore); quick link to resolve conflicts. |
 | **Conflicts** | Saves currently marked in conflict. |
 | **Index routing** | Read-only view of index routing data: aliases, `rom_sha1` map, tombstones (from the server index). |
 | **Slot map** | If `GBASYNC_SLOT_MAP_PATH` (or legacy `SAVESYNC_SLOT_MAP_PATH`) points at a JSON file the server can read, shows path and parsed JSON; otherwise explains that it is optional. |

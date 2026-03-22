@@ -208,3 +208,156 @@ def test_admin_dashboard_auth(tmp_path: Path, monkeypatch) -> None:
     body = r.json()
     assert "save_count" in body
     assert body["index_path"]
+    assert "history_max_versions_per_game" in body
+
+
+def test_admin_settings_and_routing_put(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GBASYNC_ADMIN_PASSWORD", "admin-test-pw")
+    monkeypatch.setenv("API_KEY", "test-api-key-123")
+    client = _make_client(tmp_path)
+    h = {"X-API-Key": "test-api-key-123"}
+    r = client.patch("/admin/api/settings", json={"history_max_versions_per_game": 9}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["history_max_versions_per_game"] == 9
+    assert client.get("/admin/api/dashboard", headers=h).json()["history_max_versions_per_game"] == 9
+    rom_hex = "a" * 40
+    put = client.put(
+        "/admin/api/index-routing",
+        json={
+            "aliases": {"legacy-id": "canonical-game"},
+            "rom_sha1": {rom_hex: "canonical-game"},
+            "tombstones": {"dead-id": "canonical-game"},
+        },
+        headers=h,
+    )
+    assert put.status_code == 200
+    idx = client.get("/admin/api/index-state", headers=h).json()
+    assert idx["aliases"]["legacy-id"] == "canonical-game"
+    assert idx["rom_sha1"][rom_hex] == "canonical-game"
+    assert idx["tombstones"]["dead-id"] == "canonical-game"
+
+
+def test_display_name_patch_and_list(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    data = b"one"
+    sha = hashlib.sha256(data).hexdigest()
+    params = {
+        "last_modified_utc": "2026-03-17T21:00:00+00:00",
+        "sha256": sha,
+        "size_bytes": len(data),
+        "filename_hint": "t.sav",
+        "platform_source": "test",
+    }
+    assert client.put("/save/hist-game", params=params, content=data, headers=_auth_headers()).status_code == 200
+    r = client.patch("/save/hist-game/meta", json={"display_name": "pre boss"}, headers=_auth_headers())
+    assert r.status_code == 200
+    listed = client.get("/saves", headers=_auth_headers())
+    assert listed.status_code == 200
+    rows = listed.json()["saves"]
+    assert any(s.get("game_id") == "hist-game" and s.get("display_name") == "pre boss" for s in rows)
+
+
+def test_history_list_and_restore(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    v1 = b"v1-bytes-data"
+    v2 = b"v2-bytes-data"
+    p1 = {
+        "last_modified_utc": "2026-03-17T21:00:00+00:00",
+        "sha256": hashlib.sha256(v1).hexdigest(),
+        "size_bytes": len(v1),
+        "filename_hint": "t.sav",
+        "platform_source": "test",
+    }
+    p2 = {
+        "last_modified_utc": "2026-03-18T21:00:00+00:00",
+        "sha256": hashlib.sha256(v2).hexdigest(),
+        "size_bytes": len(v2),
+        "filename_hint": "t.sav",
+        "platform_source": "test",
+    }
+    assert client.put("/save/restore-me", params=p1, content=v1, headers=_auth_headers()).status_code == 200
+    assert client.put("/save/restore-me", params=p2, content=v2, headers=_auth_headers()).status_code == 200
+    h = client.get("/save/restore-me/history", headers=_auth_headers())
+    assert h.status_code == 200
+    entries = h.json()["entries"]
+    assert entries
+    fn = entries[0]["filename"]
+    assert client.get("/save/restore-me", headers=_auth_headers()).content == v2
+    r = client.post("/save/restore-me/restore", json={"filename": fn}, headers=_auth_headers())
+    assert r.status_code == 200
+    assert client.get("/save/restore-me", headers=_auth_headers()).content == v1
+
+
+def test_history_revision_label(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    v1 = b"one"
+    v2 = b"two"
+    p1 = {
+        "last_modified_utc": "2026-03-17T21:00:00+00:00",
+        "sha256": hashlib.sha256(v1).hexdigest(),
+        "size_bytes": len(v1),
+        "filename_hint": "t.sav",
+        "platform_source": "test",
+    }
+    p2 = {
+        "last_modified_utc": "2026-03-18T21:00:00+00:00",
+        "sha256": hashlib.sha256(v2).hexdigest(),
+        "size_bytes": len(v2),
+        "filename_hint": "t.sav",
+        "platform_source": "test",
+    }
+    assert client.put("/save/rev-lab", params=p1, content=v1, headers=_auth_headers()).status_code == 200
+    assert client.put("/save/rev-lab", params=p2, content=v2, headers=_auth_headers()).status_code == 200
+    h = client.get("/save/rev-lab/history", headers=_auth_headers())
+    assert h.status_code == 200
+    fn = h.json()["entries"][0]["filename"]
+    patch = client.patch(
+        "/save/rev-lab/history/revision",
+        json={"filename": fn, "display_name": "before gym"},
+        headers=_auth_headers(),
+    )
+    assert patch.status_code == 200
+    h2 = client.get("/save/rev-lab/history", headers=_auth_headers())
+    assert h2.json()["entries"][0]["display_name"] == "before gym"
+
+
+def test_history_revision_keep_and_list(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+    v1 = b"one"
+    v2 = b"two"
+    p1 = {
+        "last_modified_utc": "2026-03-17T21:00:00+00:00",
+        "sha256": hashlib.sha256(v1).hexdigest(),
+        "size_bytes": len(v1),
+        "filename_hint": "t.sav",
+        "platform_source": "test",
+    }
+    p2 = {
+        "last_modified_utc": "2026-03-18T21:00:00+00:00",
+        "sha256": hashlib.sha256(v2).hexdigest(),
+        "size_bytes": len(v2),
+        "filename_hint": "t.sav",
+        "platform_source": "test",
+    }
+    assert client.put("/save/keep-game", params=p1, content=v1, headers=_auth_headers()).status_code == 200
+    assert client.put("/save/keep-game", params=p2, content=v2, headers=_auth_headers()).status_code == 200
+    h = client.get("/save/keep-game/history", headers=_auth_headers())
+    assert h.status_code == 200
+    fn = h.json()["entries"][0]["filename"]
+    assert h.json()["entries"][0].get("keep") is False
+    r = client.patch(
+        "/save/keep-game/history/revision/keep",
+        json={"filename": fn, "keep": True},
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 200
+    h2 = client.get("/save/keep-game/history", headers=_auth_headers())
+    assert h2.json()["entries"][0]["keep"] is True
+    r2 = client.patch(
+        "/save/keep-game/history/revision/keep",
+        json={"filename": fn, "keep": False},
+        headers=_auth_headers(),
+    )
+    assert r2.status_code == 200
+    h3 = client.get("/save/keep-game/history", headers=_auth_headers())
+    assert h3.json()["entries"][0]["keep"] is False

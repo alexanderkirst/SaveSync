@@ -21,6 +21,45 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def format_utc_12h_display(iso: str) -> str:
+    """English 12-hour clock in UTC, e.g. ``Mar 17, 2026  6:44 PM UTC``."""
+    dt = parse_utc(iso)
+    h = dt.hour
+    h12 = h % 12
+    if h12 == 0:
+        h12 = 12
+    ap = "PM" if h >= 12 else "AM"
+    mon = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[dt.month - 1]
+    return f"{mon} {dt.day}, {dt.year}  {h12}:{dt.minute:02d} {ap} UTC"
+
+
+def decode_history_backup_stamp_from_stem(stem: str) -> str | None:
+    """
+    Recover the ISO timestamp encoded in a history backup basename (without .sav).
+
+    Filenames are ``{stamp_with_hyphens}-{sha256_8}.sav`` where ``stamp_with_hyphens``
+    is ``(server_updated_at or last_modified_utc).replace(':', '-')`` from the index
+    at backup time.
+    """
+    m = re.match(r"^(.+)-([0-9a-f]{8})$", stem, re.I)
+    if not m:
+        return None
+    enc = m.group(1)
+    if "T" not in enc:
+        return None
+    s = re.sub(r"T(\d{2})-(\d{2})-(\d{2})", r"T\1:\2:\3", enc, count=1)
+    if s.endswith("Z"):
+        iso = s
+    else:
+        s = re.sub(r"([+-])(\d{2})-(\d{2})$", r"\1\2:\3", s)
+        iso = s
+    try:
+        parse_utc(iso)
+        return iso
+    except (ValueError, TypeError, OSError):
+        return None
+
+
 @dataclass
 class _IndexState:
     saves: dict[str, dict]
@@ -30,11 +69,19 @@ class _IndexState:
 
 
 class SaveStore:
-    def __init__(self, save_root: Path, history_root: Path, index_path: Path, keep_history: bool = True):
+    def __init__(
+        self,
+        save_root: Path,
+        history_root: Path,
+        index_path: Path,
+        keep_history: bool = True,
+        history_max_per_game: int = 0,
+    ):
         self.save_root = save_root
         self.history_root = history_root
         self.index_path = index_path
         self.keep_history = keep_history
+        self.history_max_per_game = max(0, int(history_max_per_game))
         self._lock = Lock()
         self.save_root.mkdir(parents=True, exist_ok=True)
         self.history_root.mkdir(parents=True, exist_ok=True)
@@ -269,6 +316,52 @@ class SaveStore:
             "tombstones": dict(state.tombstones),
         }
 
+    @staticmethod
+    def _routing_game_id_ok(s: str) -> bool:
+        if not s or "/" in s or "\\" in s or s.startswith("."):
+            return False
+        return True
+
+    def _normalize_routing_pairs(self, raw: dict[str, str], *, rom_sha1_keys: bool) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                continue
+            ks = k.strip().lower()
+            vs = v.strip().lower()
+            if not ks or not vs:
+                continue
+            if rom_sha1_keys:
+                if len(ks) != 40 or any(c not in "0123456789abcdef" for c in ks):
+                    raise ValueError(f"ROM SHA-1 key must be 40 hex chars, got {k!r}")
+            elif not self._routing_game_id_ok(ks):
+                raise ValueError(f"invalid alias or tombstone key: {k!r}")
+            if not self._routing_game_id_ok(vs):
+                raise ValueError(f"invalid canonical game id: {v!r}")
+            out[ks] = vs
+        return out
+
+    def set_history_max_per_game(self, n: int) -> None:
+        if n < 0:
+            raise ValueError("history_max_versions_per_game must be >= 0")
+        self.history_max_per_game = int(n)
+
+    def replace_routing_maps(
+        self,
+        aliases: dict[str, str],
+        rom_sha1: dict[str, str],
+        tombstones: dict[str, str],
+    ) -> None:
+        norm_a = self._normalize_routing_pairs(aliases, rom_sha1_keys=False)
+        norm_r = self._normalize_routing_pairs(rom_sha1, rom_sha1_keys=True)
+        norm_t = self._normalize_routing_pairs(tombstones, rom_sha1_keys=False)
+        with self._lock:
+            state = self._read_index_state()
+            state.aliases = norm_a
+            state.rom_sha1 = norm_r
+            state.tombstones = norm_t
+            self._write_index_state(state)
+
     def get_meta(self, game_id: str) -> SaveMeta | None:
         with self._lock:
             state = self._read_index_state()
@@ -297,6 +390,235 @@ class SaveStore:
         stamp = stamp_src.replace(":", "-")
         history_path = self.history_dir(game_id) / f"{stamp}-{existing_meta.sha256[:8]}.sav"
         shutil.copy2(existing_file, history_path)
+        self._trim_history(game_id)
+
+    def _read_history_labels_file(self, hdir: Path) -> dict[str, str]:
+        path = hdir / "labels.json"
+        if not path.is_file():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {}
+            out: dict[str, str] = {}
+            for k, v in data.items():
+                if isinstance(k, str) and isinstance(v, str) and k.strip():
+                    out[k] = v.strip()[:128]
+            return out
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            return {}
+
+    def _write_history_labels_file(self, hdir: Path, labels: dict[str, str]) -> None:
+        path = hdir / "labels.json"
+        if not labels:
+            if path.is_file():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            return
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(labels, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+
+    def _read_history_pins_file(self, hdir: Path) -> set[str]:
+        """Basenames of history files that must not be purged when trimming."""
+        path = hdir / "pins.json"
+        if not path.is_file():
+            return set()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {k for k, v in data.items() if isinstance(k, str) and k.strip() and v is True}
+            if isinstance(data, list):
+                return {str(x) for x in data if isinstance(x, str) and x.strip()}
+            return set()
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            return set()
+
+    def _write_history_pins_file(self, hdir: Path, pins: set[str]) -> None:
+        path = hdir / "pins.json"
+        cleaned = {p for p in pins if p and "/" not in p and "\\" not in p and ".." not in p}
+        if not cleaned:
+            if path.is_file():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            return
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({k: True for k in sorted(cleaned)}, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+
+    def _trim_history(self, game_id: str) -> None:
+        if self.history_max_per_game <= 0:
+            return
+        hdir = self.history_dir(game_id)
+        files = sorted(hdir.glob("*.sav"), key=lambda p: p.stat().st_mtime, reverse=True)
+        pins = self._read_history_pins_file(hdir)
+        unpinned = [p for p in files if p.name not in pins]
+        to_remove = unpinned[self.history_max_per_game :]
+        if not to_remove:
+            return
+        labels = self._read_history_labels_file(hdir)
+        labels_changed = False
+        for old in to_remove:
+            try:
+                fn = old.name
+                old.unlink()
+                if fn in labels:
+                    del labels[fn]
+                    labels_changed = True
+            except OSError:
+                pass
+        if labels_changed:
+            self._write_history_labels_file(hdir, labels)
+
+    def list_history(self, game_id: str) -> list[dict[str, str | int | None]]:
+        with self._lock:
+            state = self._read_index_state()
+            canonical = self._resolve_canonical_game_id(state, game_id)
+            if canonical not in state.saves:
+                return []
+            hdir = self.history_dir(canonical)
+            if not hdir.is_dir():
+                return []
+            labels = self._read_history_labels_file(hdir)
+            pin_set = self._read_history_pins_file(hdir)
+        out: list[dict[str, str | int | None | bool]] = []
+        for p in sorted(hdir.glob("*.sav"), key=lambda x: x.stat().st_mtime, reverse=True):
+            st = p.stat()
+            mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).replace(microsecond=0).isoformat()
+            dn = labels.get(p.name)
+            indexed = decode_history_backup_stamp_from_stem(p.stem)
+            stamp_iso = indexed or mtime
+            time_disp = None
+            try:
+                time_disp = format_utc_12h_display(stamp_iso)
+            except (ValueError, TypeError, OSError):
+                pass
+            out.append(
+                {
+                    "filename": p.name,
+                    "size_bytes": int(st.st_size),
+                    "modified_utc": mtime,
+                    "display_name": dn if dn else None,
+                    "indexed_at_utc": indexed,
+                    "time_display": time_disp,
+                    "keep": p.name in pin_set,
+                }
+            )
+        return out
+
+    def set_history_revision_display_name(self, game_id: str, filename: str, display_name: str | None) -> bool:
+        safe_name = Path(filename).name
+        if safe_name != filename or ".." in filename or "/" in filename or "\\" in filename:
+            raise ValueError("invalid history filename")
+        with self._lock:
+            state = self._read_index_state()
+            canonical = self._resolve_canonical_game_id(state, game_id)
+            if canonical not in state.saves:
+                return False
+            hdir = self.history_dir(canonical)
+            hist_path = (hdir / safe_name).resolve()
+            base = hdir.resolve()
+            if hist_path.parent != base or not hist_path.is_file():
+                return False
+            labels = self._read_history_labels_file(hdir)
+            if display_name is None or not str(display_name).strip():
+                labels.pop(safe_name, None)
+            else:
+                labels[safe_name] = str(display_name).strip()[:128]
+            self._write_history_labels_file(hdir, labels)
+        return True
+
+    def set_history_revision_keep(self, game_id: str, filename: str, keep: bool) -> bool:
+        safe_name = Path(filename).name
+        if safe_name != filename or ".." in filename or "/" in filename or "\\" in filename:
+            raise ValueError("invalid history filename")
+        with self._lock:
+            state = self._read_index_state()
+            canonical = self._resolve_canonical_game_id(state, game_id)
+            if canonical not in state.saves:
+                return False
+            hdir = self.history_dir(canonical)
+            hist_path = (hdir / safe_name).resolve()
+            base = hdir.resolve()
+            if hist_path.parent != base or not hist_path.is_file():
+                return False
+            pins = self._read_history_pins_file(hdir)
+            if keep:
+                pins.add(safe_name)
+            else:
+                pins.discard(safe_name)
+            self._write_history_pins_file(hdir, pins)
+        return True
+
+    def restore_from_history(self, game_id: str, filename: str) -> SaveMeta:
+        """Replace current blob with a history file; backs up current first."""
+        safe_name = Path(filename).name
+        if safe_name != filename or ".." in filename or "/" in filename or "\\" in filename:
+            raise ValueError("invalid history filename")
+
+        with self._lock:
+            state = self._read_index_state()
+            canonical = self._resolve_canonical_game_id(state, game_id)
+            raw = state.saves.get(canonical)
+            if not raw:
+                raise FileNotFoundError("save not in index")
+            existing = SaveMeta(game_id=canonical, **raw)
+            hdir = self.history_dir(canonical)
+            hist_path = (hdir / safe_name).resolve()
+            base = hdir.resolve()
+            if hist_path.parent != base or not hist_path.is_file():
+                raise FileNotFoundError("history file not found")
+            data = hist_path.read_bytes()
+            computed = hashlib.sha256(data).hexdigest()
+            if computed == existing.sha256 and self.save_path(canonical).is_file():
+                # Idempotent: already this revision
+                return existing
+
+            self._backup_existing(canonical, existing)
+            target = self.save_path(canonical)
+            tmp = target.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+
+            new_meta = SaveMeta(
+                game_id=canonical,
+                last_modified_utc=utc_now_iso(),
+                server_updated_at=utc_now_iso(),
+                version=existing.version + 1,
+                sha256=computed,
+                size_bytes=len(data),
+                rom_sha1=existing.rom_sha1,
+                filename_hint=existing.filename_hint,
+                platform_source=existing.platform_source or "server-restore",
+                conflict=False,
+                display_name=existing.display_name,
+            )
+            dumped = new_meta.model_dump(exclude={"game_id"})
+            if raw.get("display_name"):
+                dumped["display_name"] = raw["display_name"]
+            state.saves[canonical] = dumped
+            self._merge_duplicate_saves(state)
+            self._write_index_state(state)
+            return SaveMeta(game_id=canonical, **state.saves[canonical])
+
+    def set_display_name(self, game_id: str, display_name: str | None) -> bool:
+        with self._lock:
+            state = self._read_index_state()
+            canonical = self._resolve_canonical_game_id(state, game_id)
+            if canonical not in state.saves:
+                return False
+            raw = dict(state.saves[canonical])
+            if display_name is None or not str(display_name).strip():
+                raw.pop("display_name", None)
+            else:
+                raw["display_name"] = str(display_name).strip()[:128]
+            state.saves[canonical] = raw
+            self._write_index_state(state)
+        return True
 
     def upsert(self, game_id: str, data: bytes, incoming: SaveMeta, force: bool = False) -> tuple[SaveMeta, bool, bool, str]:
         """
@@ -356,7 +678,11 @@ class SaveStore:
 
             incoming.server_updated_at = utc_now_iso()
             incoming.version = (existing.version + 1) if existing else 1
-            state.saves[canonical] = incoming.model_dump(exclude={"game_id"})
+            incoming_dict = incoming.model_dump(exclude={"game_id"})
+            incoming_dict.pop("display_name", None)
+            if existing_raw and existing_raw.get("display_name"):
+                incoming_dict["display_name"] = existing_raw["display_name"]
+            state.saves[canonical] = incoming_dict
             self._register_identity_maps(
                 state,
                 canonical=canonical,
