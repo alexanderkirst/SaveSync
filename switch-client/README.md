@@ -1,28 +1,76 @@
-# Switch Client (libnx NRO MVP)
+# GBAsync Switch client (libnx)
 
-Nintendo Switch homebrew sync client using libnx and socket-based HTTP.
+Nintendo **Switch** homebrew app that syncs **`.sav`** files with a **GBAsync server** over plain **HTTP** (same API as 3DS). Uses **libnx**; distributed as **`.nro`** for Homebrew Menu.
 
-## Implemented features
+---
 
-1. Config parsing from `sdmc:/switch/gba-sync/config.ini`
-2. Local `.sav` scan from configured save folder(s) — **legacy** single `save_dir`, or **multi-root** GBA / NDS / GB (same layout as the 3DS client)
-3. **ROM-derived** `game_id`: GBA header (title + code), **NDS cartridge header** (title + game code at 0x00 / 0x0C), GB/Color **stem-only** when ROM is missing (matches 3DS)
-4. HTTP sync operations:
-   - `GET /saves`
-   - `GET /save/{game_id}` (+ `/meta`)
-   - `PUT /save/{game_id}` (`force=1` on uploads from this client)
-5. **Auto (A):** If the plan has **no** upload/download/skip-no-baseline/conflict work (only OK and/or locked rows), the app **skips the preview** and prints **Already Up To Date** once (no per-game `OK` lines), then the post-sync menu. Otherwise **preview** lists per-game actions, then **A** runs / **B** cancels; baseline **`.gbasync-baseline`** + SHA-256 (legacy **`.savesync-baseline`** supported); first-run **SKIP** until X/Y seeds baseline; **Conflict** UI (X/Y/B) during apply
-6. **Save viewer:** main menu **R** lists local + server ids (server **display_name** when set, else **`game_id`**); **R** toggles lock; **A** history / restore (**R** in history = keep/unkeep); **B** back (sync **preview** is confirm-only — no lock toggle on preview)
+## Prerequisites
+
+- **Hacked Switch** with **Homebrew Menu** (or equivalent) to run **`.nro`**.
+- **SD card** (or USB) to copy **`gbasync.nro`** and config.
+- A running **GBAsync server** (URL + **API key**). See **`docs/USER_GUIDE.md`**.
+
+---
+
+## Setup (install and configure)
+
+1. **Get a build** from **`dist/switch`** (or build from source — **`docs/RELEASE.md`**).
+2. **Copy to SD card:**
+   - **`gbasync.nro`** → **`sdmc:/switch/gbasync.nro`**
+3. **Create config:**
+
+   **`sdmc:/switch/gba-sync/config.ini`**
+
+   Minimal example (single GBA save folder):
+
+   ```ini
+   [server]
+   url=http://YOUR_SERVER_IP:8080
+   api_key=your-api-key
+
+   [sync]
+   save_dir=sdmc:/mGBA
+
+   [rom]
+   rom_dir=sdmc:/roms/gba
+   rom_extension=.gba
+   ```
+
+4. **Same network** as the server (or reachable IP). Use **`http://`** — this build does **not** use TLS on the console.
+5. Launch **gbasync** from **Homebrew Menu**.
+
+---
+
+## Configuration (reference)
+
+| Section | Purpose |
+|---------|---------|
+| **`[server]`** | **`url`** — GBAsync base URL. **`api_key`** — must match server **`API_KEY`**. |
+| **`[sync]`** | Legacy **`save_dir`** **or** **`gba_save_dir`**, **`nds_save_dir`**, **`gb_save_dir`**. **`locked_ids`**. **`sync_nds_saves`** (default on) — set **`false`** to ignore NDS in a mixed folder. **`skip_save_patterns`** — optional substrings to exclude files. |
+| **`[rom]`** | **`gba_rom_dir`**, **`nds_rom_dir`**, **`gb_rom_dir`** and matching **`*_rom_extension`** for header-derived **`game_id`**. |
+
+---
+
+## Features (what the app does)
+
+1. **Config** from **`sdmc:/switch/gba-sync/config.ini`**
+2. **Local `.sav` scan** — legacy **`save_dir`** or **multi-root** GBA / NDS / GB (same layout as 3DS)
+3. **`game_id`** — **GBA** header, **NDS** cartridge header (**0x00** / **0x0C**), **GB/GBC** header — or **stem** when ROM missing (aligned with 3DS/bridge)
+4. **HTTP** — **`GET /saves`**, **`GET`/`PUT /save/{game_id}`**, **`/meta`**, history as needed; **`force=1`** on uploads
+5. **Auto (A):** If only OK/locked → **Already Up To Date** (no preview). Else **preview** (non-OK rows) → **A** apply / **B** cancel; **`.gbasync-baseline`** + SHA-256 (legacy **`.savesync-baseline`**); first-run **SKIP**; **conflict** UI (**X/Y/B**)
+6. **Save viewer (main menu R):** local ∪ server; **`display_name`**; **R** lock; **A** history; **R** in history = **keep**
 7. **Upload (X)** / **download (Y)** pickers with checklist; **+** runs, **B** back
-8. **Status line** on main menu (last sync / server / Dropbox) persisted in **`.gbasync-status`** next to the first save root’s baseline
-9. Optional **`sync.locked_ids`** — comma-separated `game_id` list skipped on Auto; **R** toggles lock in **Save viewer** (main menu **R**) and **writes `config.ini`** (same path as at launch: `sdmc:/switch/gba-sync/config.ini`)
-10. **Post-sync:** **A** main menu, **+** exit app; after **Auto** when the result was **Already Up To Date**, also **Y: reboot now** (uses `spsm`)
-11. Atomic write for downloaded saves; resilient HTTP parsing (chunked bodies, `Accept-Encoding: identity`, etc.)
-12. Optional **`sync_nds_saves`** (default on) — set `false` to omit the NDS save root and skip DS titles. With **`nds_rom_dir`** set, `.sav` files whose stem matches an `.nds` ROM there are skipped when NDS sync is off (mixed mGBA folder). Without manual config, retail DS saves are often **exactly 512 KiB** (524288 bytes); when NDS sync is off, those files are skipped locally and matching remote rows (using `size_bytes` from `GET /saves`) are ignored. **Optional** **`skip_save_patterns`** substrings still apply when you need to exclude a game that does not match that size.
+8. **`.gbasync-status`** — last sync / server / Dropbox (next to first save root’s baseline)
+9. **`locked_ids`** — skipped on Auto; toggled from **Save viewer**; writes **`config.ini`**
+10. **Post-sync** — **A** menu, **+** exit; **Y: reboot** after **Already Up To Date** Auto (uses **`spsm`**)
+11. **Atomic** download writes; resilient HTTP (chunked, **`Accept-Encoding: identity`**, etc.)
+12. **`sync_nds_saves`** — when **`false`**, **512 KiB** saves treated as DS in mixed folders; **`nds_rom_dir`** skips stems with matching **`.nds`**; see **`skip_save_patterns`** for edge cases
 
-## Example config
+---
 
-**Legacy (single GBA root):**
+## Example configs
+
+### Legacy (single GBA root)
 
 ```ini
 [server]
@@ -38,7 +86,7 @@ rom_dir=sdmc:/roms/gba
 rom_extension=.gba
 ```
 
-**Multi-root (GBA + NDS + GB — same idea as 3DS `gba_save_dir` / `nds_save_dir` / `gb_save_dir`):**
+### Multi-root (GBA + NDS + GB)
 
 ```ini
 [server]
@@ -56,11 +104,10 @@ nds_rom_dir=sdmc:/roms/nds
 gb_rom_dir=sdmc:/roms/gb
 gba_rom_extension=.gba
 nds_rom_extension=.nds
-# Comma-separated list is OK — tried in order (e.g. ``.gb`` then ``.gbc``).
 gb_rom_extension=.gb,.gbc
 ```
 
-**No NDS sync (GBA/GB folder also has DS `.sav` files):** set `sync_nds_saves=false`. The 3DS client does **not** sniff bytes inside `.sav` files — it uses **separate** `nds_save_dir` / `gba_save_dir` so each emulator writes to its own folder. On Switch, if everything lands in one folder, use **`sync_nds_saves=false`**: **512 KiB** saves are treated as DS (typical retail), **nds_rom_dir** skips stems that have a matching `.nds`, and **`skip_save_patterns`** is only needed for edge cases.
+### No NDS sync (mixed folder with DS `.sav` files)
 
 ```ini
 [sync]
@@ -77,6 +124,16 @@ gb_rom_extension=.gb,.gbc
 nds_rom_extension=.nds
 ```
 
-**VC mode** (Checkpoint-style GBA VC only): `sync.mode=vc` and set `sync.vc_save_dir`; `[rom]` still supplies ROM paths for header IDs.
+### VC mode (Checkpoint-style GBA VC)
 
-Baseline files **`.gbasync-baseline`** are written per save root; the app merges them for Auto sync. Downloads are routed to the folder that matches an existing local file, or the root whose ROM path exists for the save stem (same as 3DS).
+Set **`sync.mode=vc`** and **`sync.vc_save_dir`**; **`[rom]`** still supplies ROM paths for header IDs.
+
+**Baseline files** **`.gbasync-baseline`** are written per save root; merged for Auto. Downloads go to the folder that already has a matching file, or the root whose ROM path matches the stem.
+
+---
+
+## See also
+
+- **`docs/USER_GUIDE.md`** — full install, sync flows, Dropbox, troubleshooting  
+- **`dist/README.md`** — release zip layout  
+- **`3ds-client/README.md`** — same multi-root ideas on 3DS  

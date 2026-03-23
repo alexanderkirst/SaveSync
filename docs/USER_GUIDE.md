@@ -19,6 +19,8 @@ docker compose up -d
 
 Saves and the metadata index are stored on the host under **`save_data/`** at the **repository root** (for example `save_data/saves/*.sav` and `save_data/index.json`), bind-mounted into the container—not under `server/`.
 
+**Using a different folder on disk (Syncthing, NAS, cloud drive, etc.):** The server only reads/writes normal files under **`SAVE_ROOT`** and the index paths. You can point Docker’s **volume** (or **`SAVE_ROOT` / `INDEX_PATH` / `HISTORY_ROOT`**) at **any** host directory—for example one that Syncthing or another tool already syncs. GBAsync does not talk to those apps; it only stores files there, and your other software replicates them. See **`server/README.md`** (data directory) and **`bridge/README.md`** (optional **`bridge.py`** mirror of plain `.sav` files).
+
 **Save history (per game):** With **`ENABLE_VERSION_HISTORY=true`**, each time the server replaces a save file, the previous blob is copied under **`save_data/history/{game_id}/`**. **`HISTORY_MAX_VERSIONS_PER_GAME`** (default **5** in Docker Compose; **`0`** = unlimited) caps how many backup files are kept per game. **Pinned** revisions (see below) are **not** counted toward that cap — when trimming, the server drops **unpinned** oldest files first and keeps **`pins.json`** in sync.
 
 List or restore with **`GET /save/{game_id}/history`** and **`POST /save/{game_id}/restore`**, from the **admin** UI (**History** on a row), or from the **homebrew save viewer** (**A** = history / restore). On **Switch** and **3DS** history screens, **R** toggles **keep** (pinned) for the highlighted revision (`PATCH /save/{game_id}/history/revision/keep`); pinned rows show **`[KEEP]`**. Restoring changes the **server** copy only; run **download** (or Auto) on each device afterward so local `.sav` files match, or the next upload may overwrite the restored server file.
@@ -72,7 +74,7 @@ INFO:     Uvicorn running on http://0.0.0.0:8080
    - `api_key`
    - `delta_save_dir` — a **local** folder that contains plain `*.sav` files (often Delta’s GBA save directory on Mac; can live under a **Dropbox-synced** path if the desktop client keeps real `.savs` there).
 
-The bridge does **not** talk to Delta’s **in-app** Dropbox/Google sync (Harmony uses its own cloud layout, not a flat `.sav` folder). For syncing a **Dropbox-only** folder via the API, see **`bridge/DROPBOX.md`** and `dropbox_bridge.py`.
+The bridge does **not** talk to Delta’s **in-app** Dropbox/Google sync (Harmony uses its own cloud layout, not a flat `.sav` folder). For a **flat** `*.sav` folder in Dropbox via the API, use **`dropbox_bridge.py`**. For Delta’s **Harmony** tree over the API, use **`delta_dropbox_api_sync.py`** (see **`bridge/DROPBOX.md`**).
 
 Run once:
 

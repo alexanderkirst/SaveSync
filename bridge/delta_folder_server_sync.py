@@ -479,7 +479,7 @@ class TripleConfig:
         mode = str(raw.get("sync_mode", "triple")).strip().lower()
         if mode not in ("triple", "server_delta"):
             raise ValueError('sync_mode must be "triple" or "server_delta"')
-        ow = raw.get("server_delta_one_way", False)
+        ow = raw.get("server_delta_one_way", True)
         if isinstance(ow, str):
             ow = ow.strip().lower() in ("1", "true", "yes")
         else:

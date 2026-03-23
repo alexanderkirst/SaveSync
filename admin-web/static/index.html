@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#000000" />
   <meta name="color-scheme" content="dark" />
   <title>GBAsync Admin</title>
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=12" />
 </head>
 <body>
   <header class="top">
@@ -176,6 +176,21 @@
 
   <p id="global-msg" class="msg center"></p>
 
+  <div id="upload-success-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="upload-success-title">
+    <div class="modal-backdrop" aria-hidden="true"></div>
+    <div class="modal-panel modal-panel--confirm">
+      <h3 id="upload-success-title">Upload complete</h3>
+      <p class="upload-success-lead">The server save was updated (previous revision is in history; Dropbox may sync).</p>
+      <dl class="upload-success-dl">
+        <div><dt>game_id</dt><dd id="upload-success-gameid" class="mono"></dd></div>
+        <div id="upload-success-filename-row" class="hidden"><dt>File</dt><dd id="upload-success-filename"></dd></div>
+        <div><dt>Size</dt><dd id="upload-success-size"></dd></div>
+        <div><dt>SHA256</dt><dd id="upload-success-sha" class="mono"></dd></div>
+      </dl>
+      <button type="button" id="upload-success-close" class="btn-primary">OK</button>
+    </div>
+  </div>
+
   <div id="history-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="history-modal-title">
     <div class="modal-backdrop" aria-hidden="true"></div>
     <div class="modal-panel modal-panel--history">
@@ -188,6 +203,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

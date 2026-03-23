@@ -15,12 +15,12 @@ Produces:
 Command:
 
 ```bash
-./scripts/release-server.sh v0.1.8
+./scripts/release-server.sh v1.0.0
 ```
 
-Artifacts:
+Artifacts (replace `v1.0.0` with your tag):
 
-- `dist/server/gbasync-server-v0.1.8.tar`
+- `dist/server/gbasync-server-v1.0.0.tar`
 - `dist/server/.env.example`
 - `dist/server/docker-compose.yml`
 
@@ -33,12 +33,12 @@ Produces:
 Command:
 
 ```bash
-./scripts/release-bridge.sh v0.1.8
+./scripts/release-bridge.sh v1.0.0
 ```
 
 Artifact:
 
-- `dist/bridge/gbasync-bridge-v0.1.8.zip`
+- `dist/bridge/gbasync-bridge-v1.0.0.zip`
 
 ## 3) Switch release
 
@@ -51,12 +51,12 @@ Prerequisites:
 Command:
 
 ```bash
-./scripts/release-switch.sh v0.1.8
+./scripts/release-switch.sh v1.0.0
 ```
 
 Artifacts directory:
 
-- `dist/switch/gbasync-switch-v0.1.8/`
+- `dist/switch/gbasync-switch-v1.0.0/`
 
 Expected files (depending on build):
 
@@ -78,12 +78,12 @@ Prerequisites:
 Command:
 
 ```bash
-./scripts/release-3ds.sh v0.1.8
+./scripts/release-3ds.sh v1.0.0
 ```
 
 Artifacts directory:
 
-- `dist/3ds/gbasync-3ds-v0.1.8/`
+- `dist/3ds/gbasync-3ds-v1.0.0/`
 
 Expected files (depending on build):
 
@@ -93,15 +93,16 @@ Expected files (depending on build):
 
 ## 5) Suggested release checklist
 
-1. `cd server && source .venv/bin/activate && pytest -q`
-2. Manual sync smoke test:
+1. Bump the server’s reported version in **`server/app/main.py`** (`FastAPI(..., version=...)`) to match the tag.
+2. `cd server && source .venv/bin/activate && pytest -q`
+3. Manual sync smoke test:
    - start server
    - run bridge `--once`
    - verify `GET /saves`
-3. Build Switch client
-4. Build 3DS client
-5. Generate all `dist/` artifacts
-6. Publish release notes with:
+4. Build Switch client
+5. Build 3DS client
+6. Generate all `dist/` artifacts
+7. Add **`docs/RELEASE_NOTES_vX.Y.Z.md`** and publish with:
    - API changes (e.g. **`DELETE /save/{game_id}`**, save **history** / **restore** / **keep** if applicable)
    - console UX (baseline Auto, conflict UI, confirm + post-sync screens, save viewer + history)
    - known limitations

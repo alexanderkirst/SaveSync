@@ -289,7 +289,8 @@ def load_api_config(path: Path) -> tuple[TripleConfig, str]:
     if mode not in ("triple", "server_delta"):
         raise ValueError('sync_mode must be "triple" or "server_delta"')
 
-    ow = raw.get("server_delta_one_way", False)
+    # Match server/write_bridge_config.py: default True when unset (Harmony timestamps often block server→Dropbox).
+    ow = raw.get("server_delta_one_way", True)
     if isinstance(ow, str):
         ow = ow.strip().lower() in ("1", "true", "yes")
     else:

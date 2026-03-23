@@ -53,6 +53,22 @@ store = SaveStore(
 
 app = FastAPI(title="GBAsync Server", version="0.1.8")
 
+
+def _configure_gbasync_logging() -> None:
+    """Emit gbasync.* INFO to stderr. Default root logger is WARNING, so app logs were silent."""
+    root_pkg = logging.getLogger("gbasync")
+    root_pkg.setLevel(logging.INFO)
+    if root_pkg.handlers:
+        return
+    h = logging.StreamHandler(sys.stderr)
+    h.setLevel(logging.INFO)
+    h.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    root_pkg.addHandler(h)
+    root_pkg.propagate = False
+
+
+_configure_gbasync_logging()
+
 _log = logging.getLogger("gbasync")
 _dropbox_sync_timer_lock = threading.Lock()
 _dropbox_sync_timer: threading.Timer | None = None

@@ -650,7 +650,7 @@ button:not(.tabs button).danger:hover {
   order: -1;
 }
 
-/* Four buttons in DOM order: Download, History | Display name, Copy SHA (row-major 2×2) */
+/* Four buttons in DOM order: Download, Upload | History, Display name (row-major 2×2) */
 .save-actions-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -897,10 +897,37 @@ tbody tr:hover td {
   padding: 0.75rem 0.5rem;
 }
 
+/* Fixed so “Uploading…” / errors are visible without scrolling past the main layout */
 #global-msg {
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 0.5rem 0;
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  max-width: min(980px, calc(100vw - 1.25rem));
+  margin: 0;
+  padding: 0.45rem 0.75rem;
+  background: var(--bg-grouped);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  border: 0.5px solid var(--separator);
+  border-top: none;
+  box-shadow: var(--shadow-card);
+  display: none;
+}
+#global-msg.has-msg {
+  display: block;
+}
+
+.sr-only-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* —— Modal / sheet —— */
@@ -944,6 +971,49 @@ tbody tr:hover td {
 
 .modal-panel--history {
   padding-bottom: 1.1rem;
+}
+
+.modal-panel--confirm {
+  max-width: 420px;
+  max-height: min(85vh, 520px);
+}
+
+.upload-success-lead {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--label-secondary);
+}
+
+.upload-success-dl {
+  margin: 0 0 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  font-size: 0.8125rem;
+}
+
+.upload-success-dl > div {
+  display: grid;
+  grid-template-columns: 5rem 1fr;
+  gap: 0.35rem 0.65rem;
+  align-items: baseline;
+}
+
+.upload-success-dl dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--label-secondary);
+}
+
+.upload-success-dl dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+#upload-success-close {
+  width: 100%;
+  margin-top: 0.15rem;
 }
 
 .modal-panel--history .history-entries-scroll {

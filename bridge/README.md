@@ -1,73 +1,120 @@
-# Delta Bridge
+# GBAsync bridge (desktop / CLI tools)
 
-Desktop sync agent that syncs a **local folder** of `.sav` files with the GBAsync server.
+Python tools that sync **local `.sav` files** or **Dropbox** (plain folders or **Delta Emulator / Harmony** trees) with a **GBAsync server**. Shared **`game_id`** logic lives in **`bridge/game_id.py`** and matches the Switch/3DS clients where possible.
 
-### Is this “Dropbox integration”?
+---
 
-**Partially.** `bridge.py` only reads the filesystem. If Delta (or anything else) stores saves in a folder that **Dropbox’s desktop app** mirrors—e.g. you point `delta_save_dir` at `~/Dropbox/SomeFolder`—then Dropbox is only moving files; **GBAsync still sees plain local `.sav` names**.
+## Do I need this folder?
 
-Delta’s **built-in** Dropbox/Google sync uses the **Harmony** stack and **does not** expose a simple “folder of `.sav` files” to third-party tools. So you **cannot** point `bridge.py` at Delta’s raw cloud layout on disk in a supported way.
+| Your setup | Need standalone `bridge/`? |
+|------------|------------------------------|
+| **Docker server** + Switch/3DS only | **No** — consoles use HTTP to the server. |
+| **Docker server** + **`GBASYNC_DROPBOX_MODE`** = `plain` or `delta_api` | **No** for running scripts — the **container** ships **`/app/bridge`**, runs **`write_bridge_config.py`**, and a **sidecar** calls the same Python entrypoints. You only edit **`.env`** (see **`docs/USER_GUIDE.md`**). |
+| **No Docker** on a PC/Mac, but you want to sync a **local** folder of `.sav` with the server | **Yes** — use **`bridge.py`** from this directory (or the **`dist/bridge`** zip). |
+| **Harmony folder only on disk** (Dropbox desktop app) on a machine **without** the GBAsync container | **Yes** — run **`delta_folder_server_sync.py`** on that host. |
+| **Harmony only in Dropbox** (no local Delta tree), and **not** using Docker sidecar | **Yes** — run **`delta_dropbox_api_sync.py`**. |
 
-For Dropbox API usage, start with **`DROPBOX_SETUP.md`** (`.env` + JSON paths). Details and Harmony notes: **`DROPBOX.md`**, **`DELTA_DROPBOX_FORMAT.md`**.
+If anything in the table is unclear, read **`docs/USER_GUIDE.md`** first.
 
-## `bridge.py` modes
+---
 
-- `--once`: one pull/push pass then exit
-- `--watch`: filesystem watch + periodic polling
-- `--dry-run`: print actions without writing/uploading
+## Prerequisites
 
-## Setup
+1. **Python 3.11+** (3.12 is fine).
+2. From this directory:
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp config.example.json config.json
-python bridge.py --config config.json --once
-```
+   ```bash
+   cd bridge
+   python3 -m venv .venv
+   source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
 
-## Optional: Dropbox API sync
+3. **Dropbox API scripts** additionally need:
 
-```bash
-pip install -r requirements-dropbox.txt
-# From repo root: cp .env.example .env  then add DROPBOX_* (see DROPBOX_SETUP.md)
-python dropbox_bridge.py --config config.example.dropbox.json --once
-```
+   ```bash
+   pip install -r requirements-dropbox.txt
+   ```
 
-## Delta Dropbox folder ↔ `.sav` (Harmony file layout)
+4. For **`delta_dropbox_api_sync.py`** / **`dropbox_bridge.py`**, put **Dropbox credentials** in the **repository-root** **`.env`** (same file as the server). See **`DROPBOX_SETUP.md`**.
 
-If you download the **Delta Emulator** folder from Dropbox, saves live next to JSON metadata as `GameSave-{id}-gameSave` (see **`DELTA_DROPBOX_FORMAT.md`**).
+---
 
-```bash
-python3 delta_dropbox_sav.py list --delta-root "/path/to/Delta Emulator"
-python3 delta_dropbox_sav.py export --delta-root "..." --out-dir ./savs
-python3 delta_dropbox_sav.py import-sav --delta-root "..." --identifier <40-hex> --sav ./updated.sav --backup-dir ./bak
-```
+## Scripts at a glance
 
-Use that to round-trip with **GBAsync** (export `.sav` → upload via bridge/server; download from server → `import-sav` → re-sync folder to Dropbox). This matches the “search for the id string, download GameSave, rename to `.sav`” guides, but keeps metadata consistent on **import**.
+| Script | What it does |
+|--------|----------------|
+| **`bridge.py`** | Sync a **local** directory of plain **`*.sav`** files ↔ GBAsync server (`--once` / `--watch` / `--dry-run`). |
+| **`dropbox_bridge.py`** | Sync a **Dropbox API** path of **flat** `*.sav` files ↔ server (**not** Harmony layout). |
+| **`delta_folder_server_sync.py`** | Merge **server** ↔ **Delta Emulator folder on disk** (Harmony JSON + blobs); `sync_mode` `triple` or `server_delta`. |
+| **`delta_dropbox_api_sync.py`** | Same merge idea as above, but **download → merge → upload** via **Dropbox HTTP API** (no local Delta tree required). |
+| **`delta_dropbox_sav.py`** | **List / export / import** Harmony saves as `.sav` for manual round-trips. |
 
-## Server / local `.sav` ↔ Delta Dropbox folder (Harmony conversion)
+Details on Harmony file layout: **`DELTA_DROPBOX_FORMAT.md`**. Dropbox env and JSON: **`DROPBOX_SETUP.md`**, **`DROPBOX.md`**.
 
-**Goal:** keep GBAsync (3DS/Switch uploads) in sync with Delta’s **real** Dropbox layout (`GameSave-*` JSON + `*-gameSave` blobs), not a separate flat `.sav` tree in Dropbox. When the server or a local `.sav` wins, the script **pads, hashes, and rewrites** those Harmony files (`apply_bytes_to_delta`); the **Dropbox desktop app** then uploads the changed files.
+---
 
-Run **`delta_folder_server_sync.py`**:
+## Local copies, non-Dropbox sync, and Syncthing-style workflows
 
-1. `pip install -r requirements.txt`
-2. Copy **`config.example.delta_sync.json`** → `config.delta_sync.json`
-3. Set **`delta_root`** to the **`Delta Emulator`** folder Dropbox syncs locally, plus **`server_url`**, **`api_key`**, **`rom_dirs`** (and optional **`rom_map_path`**, **`rom_extensions`**, **`delta_slot_map_path`**). Linking to Delta is by **ROM SHA-1** (`Game-*.json` `sha1Hash`); ROMs are scanned recursively under `rom_dirs`.
-4. **`sync_mode`**:
-   - **`triple`** (default): merge **local `.sav` mtime**, **server**, and **Delta** — use when you also edit plain `.sav` files on disk.
-   - **`server_delta`**: merge **only server vs Delta** — use when 3DS/Switch (and the server) are the source of truth; **`local_save_dir`** is just a **mirror** of the winning bytes (e.g. repo **`save_data/saves`** on the host that runs the script).
-   - **`delta_slot_map_path`** (recommended): persistent JSON map of **Harmony slot id** (`GameSave-{id}`) → server **`game_id`**. This stabilizes hack/retail routing across runs and avoids accidental remaps when titles share the same cartridge header (`BPRE`, `BPEE`, etc.).
-5. Run periodically:
+**Two different ideas:**
 
-```bash
-python3 delta_folder_server_sync.py --config config.delta_sync.json --once
-```
+1. **Where the server stores its canonical files**  
+   Configure **`SAVE_ROOT`** / **`INDEX_PATH`** / **`HISTORY_ROOT`** (see **`server/README.md`**) to point at **any** directory on disk. In Docker, that usually means the **left-hand side** of the volume mount is a folder you care about—e.g. a path that **Syncthing**, **Resilio**, a cloud-drive sync folder, or **NFS** already replicates. GBAsync does **not** integrate with those tools; it just writes files. **No** `bridge.py` is required for “my server data lives on a synced disk.”
 
-Only **`--once`** is built in; use cron/launchd or a loop for repeats.
+2. **A separate mirror of plain `.sav` files**  
+   If you want a **second** tree of **only** `*.sav` files (same names/keys as the server expects) that stays aligned with the GBAsync API—so another app can watch **that** folder—use **`bridge.py`**: set **`delta_save_dir`** in **`config.json`** to the folder path. Run **`bridge.py`** on a schedule or with **`--watch`**. That folder can itself live inside a directory synced by **anything** you like; GBAsync only updates the `.sav` files via **`bridge.py`**.
 
-### How Delta title -> server `game_id` is matched (not guesswork)
+**Dropbox** in this repo means **Dropbox’s API** or the **Harmony** layout—not “the only way to get files off the server.” For Delta on iOS, **Harmony** integration is separate; for “my own disk + my own sync,” use **(1)** and/or **(2)** above.
+
+---
+
+## Setup: `bridge.py` (local folder ↔ server)
+
+1. `cp config.example.json config.json`
+2. Edit **`config.json`**: **`server_url`**, **`api_key`**, **`delta_save_dir`** (folder of `.sav` files), optional **`rom_dirs`** / **`rom_map_path`** / **`poll_seconds`**.
+3. Run once:
+
+   ```bash
+   python3 bridge.py --config config.json --once
+   ```
+
+4. Or continuous watch:
+
+   ```bash
+   python3 bridge.py --config config.json --watch
+   ```
+
+---
+
+## Setup: `dropbox_bridge.py` (flat `.sav` in Dropbox ↔ server)
+
+1. Complete **`DROPBOX_SETUP.md`** (`.env` + Dropbox app).
+2. Copy **`config.example.dropbox.json`** → e.g. `config.dropbox.json`; set **`dropbox.remote_folder`**, **`server_url`**, **`api_key`**.
+3. `pip install -r requirements-dropbox.txt`
+4. Run:
+
+   ```bash
+   python3 dropbox_bridge.py --config config.dropbox.json --once
+   ```
+
+   Use **`--watch`** for a loop (see script help).
+
+---
+
+## Setup: `delta_folder_server_sync.py` (Harmony folder on disk ↔ server)
+
+1. Install deps: `pip install -r requirements.txt`
+2. Copy **`config.example.delta_sync.json`** → `config.delta_sync.json`.
+3. Set **`delta_root`** to your **Delta Emulator** folder (as synced by Dropbox desktop), **`server_url`**, **`api_key`**, **`rom_dirs`**, **`sync_mode`** (`triple` or `server_delta`), optional **`delta_slot_map_path`**, **`rom_map_path`**, **`rom_extensions`**.
+4. Run:
+
+   ```bash
+   python3 delta_folder_server_sync.py --config config.delta_sync.json --once
+   ```
+
+Repeat on a schedule (cron, launchd) if needed—only **`--once`** is built in.
+
+### How Delta titles map to server `game_id`
 
 Matching is deterministic and ordered:
 
@@ -116,32 +163,81 @@ Notes:
 - If `<server_game_id>` does not exist on the server, mapping is ignored and logged as stale.
 - Alternative override: create a dedicated server row first (e.g. `PUT /save/redrocket`), then rerun sync so auto-bootstrap can learn and persist the mapping.
 
-### Same merge over the Dropbox HTTP API (no desktop client)
+---
 
-Use **`delta_dropbox_api_sync.py`** when the Delta folder exists **only in Dropbox** and you want the [Dropbox HTTP API](https://www.dropbox.com/developers/documentation/http/documentation) (via the Python SDK). Same **repository-root `.env`** as **`DROPBOX_SETUP.md`**; set **`dropbox.remote_delta_folder`** in **`config.example.delta_dropbox_api.json`**. Each pass downloads the Harmony tree, merges, then uploads changed files.
+## Setup: `delta_dropbox_api_sync.py` (Harmony in Dropbox only, no local tree)
+
+Use when the Delta folder exists **only in Dropbox** and you want the [Dropbox HTTP API](https://www.dropbox.com/developers/documentation/http/documentation). Same **repository-root `.env`** as **`DROPBOX_SETUP.md`**; set **`dropbox.remote_delta_folder`** in **`config.example.delta_dropbox_api.json`**. Each pass downloads the Harmony tree, merges, then uploads changed files.
+
+```bash
+python3 delta_dropbox_api_sync.py --config config.delta_dropbox_api.json --once
+```
 
 Current behavior for safer Delta sync:
 
 - Upload order is **blob files first**, then `GameSave-*` JSON sidecars.
 - After uploading a save blob, sidecar `files[0].versionIdentifier` is aligned to the blob's Dropbox `rev`.
-- This keeps Harmony attachment metadata coherent and reduces Delta download/conflict churn from stale revision pointers.
 
-## Config fields (`bridge.py`)
+---
 
-- `server_url`: GBAsync server base URL
-- `api_key`: server API key
-- `delta_save_dir`: local Delta save folder to monitor
-- `poll_seconds`: periodic poll interval
-- `rom_dirs`: optional list of ROM directories for ROM-header-based `game_id`
-- `rom_map_path`: optional JSON mapping save stem -> ROM path
-- `rom_extensions`: optional ROM extensions used in `rom_dirs` matching
+## `delta_dropbox_sav.py` (inspect / export / import Harmony saves)
+
+If you download the **Delta Emulator** folder from Dropbox, saves live next to JSON metadata as `GameSave-{id}-gameSave` (see **`DELTA_DROPBOX_FORMAT.md`**).
+
+```bash
+python3 delta_dropbox_sav.py list --delta-root "/path/to/Delta Emulator"
+python3 delta_dropbox_sav.py export --delta-root "..." --out-dir ./savs
+python3 delta_dropbox_sav.py import-sav --delta-root "..." --identifier <40-hex> --sav ./updated.sav --backup-dir ./bak
+```
+
+Use that to round-trip with GBAsync (export `.sav` → upload via server; download from server → `import-sav` → re-upload to Dropbox). This keeps metadata consistent on **import**.
+
+---
+
+## Environment variable names (Docker vs legacy)
+
+Use **`GBASYNC_*`** names in the repo-root **`.env`** (see **`.env.example`**). Legacy **`SAVESYNC_*`** names are still read by **`server/write_bridge_config.py`** for the same settings.
+
+---
+
+## Is this “Dropbox integration”?
+
+**Partially.** `bridge.py` only reads the filesystem. If Delta (or anything else) stores saves in a folder that **Dropbox’s desktop app** mirrors—e.g. you point `delta_save_dir` at `~/Dropbox/SomeFolder`—then Dropbox is only moving files; GBAsync still sees plain local `.sav` names.
+
+Delta’s **built-in** Dropbox/Google sync uses the **Harmony** stack and **does not** expose a simple “folder of `.sav` files” to third-party tools. You **cannot** point `bridge.py` at Delta’s raw cloud layout on disk in a supported way.
+
+---
+
+## `bridge.py` CLI flags
+
+- **`--once`**: one pull/push pass then exit  
+- **`--watch`**: filesystem watch + periodic polling  
+- **`--dry-run`**: print actions without writing/uploading  
+
+## Config fields (`bridge.py` JSON)
+
+- **`server_url`**: GBAsync server base URL  
+- **`api_key`**: server API key  
+- **`delta_save_dir`**: local folder to monitor  
+- **`poll_seconds`**: periodic poll interval  
+- **`rom_dirs`**: optional list of ROM directories for ROM-header-based `game_id`  
+- **`rom_map_path`**: optional JSON mapping save stem → ROM path  
+- **`rom_extensions`**: optional ROM extensions used in `rom_dirs` matching  
 
 ## Notes
 
-- Stale **`game_id`** rows on the server (e.g. after experiments) are removed with **`DELETE /save/{game_id}`** — see root **`server/README.md`** / **`USER_GUIDE.md`** (`index.json` is authoritative for **`GET /saves`**).
-- Game ID resolution order:
-  1. If matching ROM is found, derive from GBA ROM header (`title + game code`)
-  2. Fallback to normalized `.sav` filename stem
+- Stale **`game_id`** rows on the server (e.g. after experiments) are removed with **`DELETE /save/{game_id}`** — see **`server/README.md`** / **`docs/USER_GUIDE.md`** (`index.json` is authoritative for **`GET /saves`**).
+- Game ID resolution order in **`bridge.py`**:
+  1. If matching ROM is found, derive from GBA ROM header (`title + game code`) (and NDS/GB parsers where applicable in shared code).
+  2. Fallback to normalized `.sav` filename stem.
 - ROM matching sources:
-  - `rom_map_path` JSON mapping save stem to ROM path
-  - `rom_dirs` + `rom_extensions` stem matching
+  - **`rom_map_path`** JSON mapping save stem to ROM path  
+  - **`rom_dirs`** + **`rom_extensions`** stem matching  
+
+---
+
+## See also
+
+- **`docs/USER_GUIDE.md`** — end-to-end server + Dropbox + consoles  
+- **`server/README.md`** — HTTP API  
+- **`DROPBOX_SETUP.md`**, **`DROPBOX.md`**, **`DELTA_DROPBOX_FORMAT.md`**

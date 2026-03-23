@@ -211,6 +211,50 @@ def test_admin_dashboard_auth(tmp_path: Path, monkeypatch) -> None:
     assert "history_max_versions_per_game" in body
 
 
+def test_admin_put_save_roundtrip(tmp_path: Path, monkeypatch) -> None:
+    """Browser admin uploads use PUT /admin/api/save/{game_id} with session or X-API-Key."""
+    monkeypatch.setenv("GBASYNC_ADMIN_PASSWORD", "admin-test-pw")
+    monkeypatch.setenv("API_KEY", "test-api-key-123")
+    client = _make_client(tmp_path)
+    data = b"admin-web-upload"
+    sha = hashlib.sha256(data).hexdigest()
+    params = {
+        "last_modified_utc": "2026-03-17T21:00:00+00:00",
+        "sha256": sha,
+        "size_bytes": len(data),
+        "filename_hint": "picked.sav",
+        "platform_source": "admin-web",
+        "force": "true",
+    }
+    h = {"X-API-Key": "test-api-key-123"}
+    put = client.put("/admin/api/save/upload-gid", params=params, content=data, headers=h)
+    assert put.status_code == 200
+    assert put.json()["applied"] is True
+    get = client.get("/save/upload-gid", headers=h)
+    assert get.status_code == 200
+    assert get.content == data
+
+
+def test_admin_put_save_without_client_sha256(tmp_path: Path, monkeypatch) -> None:
+    """Admin UI on non-HTTPS LAN may omit sha256; server hashes the body."""
+    monkeypatch.setenv("GBASYNC_ADMIN_PASSWORD", "admin-test-pw")
+    monkeypatch.setenv("API_KEY", "test-api-key-123")
+    client = _make_client(tmp_path)
+    data = b"no-client-sha"
+    sha = hashlib.sha256(data).hexdigest()
+    params = {
+        "last_modified_utc": "2026-03-17T21:00:00+00:00",
+        "size_bytes": len(data),
+        "platform_source": "admin-web",
+        "force": "true",
+    }
+    h = {"X-API-Key": "test-api-key-123"}
+    put = client.put("/admin/api/save/no-sha-gid", params=params, content=data, headers=h)
+    assert put.status_code == 200
+    assert put.json()["applied"] is True
+    assert put.json()["effective_meta"]["sha256"] == sha
+
+
 def test_admin_settings_and_routing_put(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GBASYNC_ADMIN_PASSWORD", "admin-test-pw")
     monkeypatch.setenv("API_KEY", "test-api-key-123")

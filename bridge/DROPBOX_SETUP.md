@@ -13,17 +13,17 @@ For a **standalone bridge zip**, use `.env` in the same folder as the scripts.
 
 If you run **`docker compose`** from `server/`, you can enable Dropbox without installing bridge software on the host:
 
-1. In the root `.env`, set e.g. `SAVESYNC_DROPBOX_MODE=delta_api`, `DROPBOX_ACCESS_TOKEN=…`, `DROPBOX_REMOTE_DELTA_FOLDER=/…`, and mount ROMs + set `SAVESYNC_ROM_DIRS=/roms` when using Delta API sync (see comments in `.env.example` and `server/docker-compose.yml`).
+1. In the root `.env`, set e.g. `GBASYNC_DROPBOX_MODE=delta_api`, `DROPBOX_ACCESS_TOKEN=…`, `DROPBOX_REMOTE_DELTA_FOLDER=/…`, and mount ROMs + set `GBASYNC_ROM_DIRS=/roms` when using Delta API sync (see comments in `.env.example` and `server/docker-compose.yml`). Legacy env names **`SAVESYNC_*`** for the same keys are still accepted by `write_bridge_config.py`.
 2. `docker compose up -d --build`
 
-The entrypoint starts **uvicorn** and a small **sidecar** that runs the chosen bridge on `SAVESYNC_DROPBOX_INTERVAL_SECONDS`.
+The entrypoint runs **`write_bridge_config`**, starts **uvicorn**, and a small **sidecar** that runs the chosen bridge on **`GBASYNC_DROPBOX_INTERVAL_SECONDS`** (min 10s).
 
-For stable Delta two-way mode (`SAVESYNC_SERVER_DELTA_ONE_WAY=false`), recommended starting values:
+For stable Delta two-way mode (`GBASYNC_SERVER_DELTA_ONE_WAY=false`), example starting values:
 
 ```env
-SAVESYNC_DROPBOX_INTERVAL_SECONDS=120
-SAVESYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS=900
-SAVESYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS=3600
+GBASYNC_DROPBOX_INTERVAL_SECONDS=120
+GBASYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS=900
+GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS=3600
 ```
 
 One first-time conflict prompt in Delta can still happen after earlier divergent history; choose the side you want once, then normal sync should stabilize.

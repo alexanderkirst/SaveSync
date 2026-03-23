@@ -51,6 +51,143 @@ function setGlobal(msg, isErr) {
   const g = document.getElementById("global-msg");
   g.textContent = msg || "";
   g.classList.toggle("error", !!isErr);
+  g.classList.toggle("has-msg", Boolean(msg && String(msg).trim()));
+}
+
+/** @param {Uint8Array} bytes */
+async function sha256Hex(bytes) {
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Replace server save with file bytes (same as client PUT /save with force).
+ * Backs up prior revision to history when the blob changes.
+ */
+async function uploadSaveFromFile(gameId, file) {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const size = bytes.byteLength;
+  const t = file.lastModified ? file.lastModified : Date.now();
+  const lastMod = new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const qs = new URLSearchParams({
+    last_modified_utc: lastMod,
+    size_bytes: String(size),
+    force: "true",
+    platform_source: "admin-web",
+  });
+  let shaClient = "";
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    shaClient = await sha256Hex(bytes);
+    qs.set("sha256", shaClient);
+  }
+  if (file.name) qs.set("filename_hint", file.name);
+  const r = await fetch(`${API}/save/${encodeURIComponent(gameId)}?${qs}`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: bytes,
+  });
+  const text = await r.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+  if (!r.ok) {
+    const detail = data?.detail || data?.raw || r.statusText;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  const shaOut =
+    (data && data.effective_meta && data.effective_meta.sha256) || shaClient || "";
+  return {
+    data,
+    sha256: String(shaOut).toLowerCase(),
+    sizeBytes: size,
+    fileName: file.name ? String(file.name) : "",
+  };
+}
+
+function showUploadSuccessModal(meta) {
+  const { gameId, fileName, sizeBytes, sha256 } = meta;
+  const modal = document.getElementById("upload-success-modal");
+  const shaDisp = sha256 ? `${sha256.slice(0, 20)}…` : "—";
+  const sizeDisp = sizeBytes != null ? `${Number(sizeBytes).toLocaleString()} bytes` : "—";
+  if (!modal) {
+    window.alert(
+      `Upload complete.\n\ngame_id: ${gameId || "—"}\nFile: ${fileName || "—"}\nSize: ${sizeDisp}\nSHA256: ${shaDisp}`
+    );
+    return;
+  }
+  document.getElementById("upload-success-gameid").textContent = gameId || "—";
+  const fnRow = document.getElementById("upload-success-filename-row");
+  if (fileName) {
+    document.getElementById("upload-success-filename").textContent = fileName;
+    fnRow.classList.remove("hidden");
+  } else {
+    fnRow.classList.add("hidden");
+  }
+  document.getElementById("upload-success-size").textContent = sizeDisp;
+  const shaEl = document.getElementById("upload-success-sha");
+  shaEl.textContent = shaDisp;
+  shaEl.title = sha256 || "";
+  modal.classList.remove("hidden");
+  document.getElementById("upload-success-close")?.focus();
+}
+
+function closeUploadSuccessModal() {
+  document.getElementById("upload-success-modal")?.classList.add("hidden");
+}
+
+let _saveUploadInput = null;
+function triggerSaveFileUpload(gameId) {
+  if (!_saveUploadInput) {
+    _saveUploadInput = document.createElement("input");
+    _saveUploadInput.type = "file";
+    _saveUploadInput.accept = ".sav,application/octet-stream";
+    _saveUploadInput.className = "sr-only-file";
+    _saveUploadInput.setAttribute("aria-hidden", "true");
+    _saveUploadInput.addEventListener("change", async () => {
+      const file = _saveUploadInput.files?.[0];
+      const gid = _saveUploadInput.dataset.gameId || "";
+      _saveUploadInput.value = "";
+      if (!gid) {
+        setGlobal("Upload failed: missing game id (please reload the page).", true);
+        return;
+      }
+      if (!file) {
+        return;
+      }
+      try {
+        setGlobal("Uploading…", false);
+        const meta = await uploadSaveFromFile(gid, file);
+        showUploadSuccessModal({
+          gameId: gid,
+          fileName: meta.fileName,
+          sizeBytes: meta.sizeBytes,
+          sha256: meta.sha256,
+        });
+        setGlobal("");
+        try {
+          await loadAll();
+        } catch (reloadErr) {
+          setGlobal(
+            `Upload saved, but refreshing the list failed: ${reloadErr.message || String(reloadErr)}`,
+            true
+          );
+        }
+      } catch (e) {
+        setGlobal(e.message || String(e), true);
+      }
+    });
+    document.body.appendChild(_saveUploadInput);
+  }
+  _saveUploadInput.dataset.gameId = gameId;
+  _saveUploadInput.value = "";
+  _saveUploadInput.click();
 }
 
 async function refreshAuth() {
@@ -81,13 +218,12 @@ async function refreshAuth() {
 }
 
 function attachSaveRowActions(wrap, s) {
-  const shaFull = s.sha256 || "";
-  const bCopy = document.createElement("button");
-  bCopy.textContent = "Copy SHA";
-  bCopy.type = "button";
-  bCopy.onclick = () => {
-    navigator.clipboard.writeText(shaFull).then(() => setGlobal("SHA copied.", false)).catch(() => setGlobal("Copy failed", true));
-  };
+  const bUpload = document.createElement("button");
+  bUpload.textContent = "Upload";
+  bUpload.type = "button";
+  bUpload.title =
+    "Replace the server save with a .sav from disk (current file is backed up to history; Dropbox sync may run). Same pipeline as a client upload with force.";
+  bUpload.onclick = () => triggerSaveFileUpload(s.game_id);
   const bDl = document.createElement("button");
   bDl.textContent = "Download";
   bDl.type = "button";
@@ -112,13 +248,13 @@ function attachSaveRowActions(wrap, s) {
     };
   }
 
-  /* 2×2 grid (table + cards): col1 Download/History, col2 Display name / Copy SHA */
+  /* 2×2 grid (table + cards): row1 Download | Upload, row2 History | Display name */
   const grid = document.createElement("div");
   grid.className = "save-actions-grid";
   grid.appendChild(bDl);
+  grid.appendChild(bUpload);
   grid.appendChild(bHist);
   grid.appendChild(bName);
-  grid.appendChild(bCopy);
   wrap.appendChild(grid);
   if (bResolve) {
     const row = document.createElement("div");
@@ -592,6 +728,11 @@ document.getElementById("btn-save-order")?.addEventListener("click", async () =>
 document.getElementById("history-close")?.addEventListener("click", () => closeHistoryModal());
 document.getElementById("history-modal")?.addEventListener("click", (e) => {
   if (e.target.classList.contains("modal-backdrop")) closeHistoryModal();
+});
+
+document.getElementById("upload-success-close")?.addEventListener("click", () => closeUploadSuccessModal());
+document.getElementById("upload-success-modal")?.addEventListener("click", (e) => {
+  if (e.target.classList.contains("modal-backdrop")) closeUploadSuccessModal();
 });
 
 document.getElementById("btn-save-settings")?.addEventListener("click", async () => {

@@ -7,3 +7,14 @@ save_data/
 dist/
 .tmp/
 .env
+
+# --- Local / internal docs (ideas, plans, performance notes, scratch) ---
+next.md
+docs/TODO.md
+docs/INITIAL_IDEA.md
+docs/CONSOLE_CLIENT_PERFORMANCE.md
+docs/DROPBOX_SYNC_PERFORMANCE_PLAN.md
+docs/HARDWARE_VALIDATION_CHECKLIST.md
+
+# Archived release notes (keep current shipped notes tracked; add a line when you retire a version)
+docs/RELEASE_NOTES_v0.*.md

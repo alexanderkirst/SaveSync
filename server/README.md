@@ -27,6 +27,7 @@ FastAPI backend for binary save storage and metadata coordination.
 
 - `GET /save/{game_id}/history` — list backup revisions (includes **`keep`** pin state and optional **`display_name`** per revision when labels exist).
 - `POST /save/{game_id}/restore` — restore the active save from a named history file (server-side only).
+- `PATCH /save/{game_id}/history/revision` — optional per-backup **`display_name`** (label) for a history `filename`.
 - `PATCH /save/{game_id}/history/revision/keep` — pin or unpin a history file (`filename`, `keep`); pinned files are stored in **`pins.json`** under that game’s history directory and are **not** trimmed first when enforcing **`HISTORY_MAX_VERSIONS_PER_GAME`**.
 - `PATCH /save/{game_id}/meta` — optional **`display_name`** for the main index row (friendly label).
 
@@ -34,7 +35,9 @@ See **`docs/USER_GUIDE.md`** for retention behavior and console flows.
 
 ## Admin web UI (optional)
 
-When `GBASYNC_ADMIN_PASSWORD` is set, open **`http://<host>:8080/admin`** (redirects to `/admin/ui/`). Log in with that password, or call `/admin/api/*` with **`X-API-Key`** (same as the main API) instead of a browser session. If the password env var is unset, admin routes return **404** (disabled).
+When `GBASYNC_ADMIN_PASSWORD` is set, open **`http://<host>:8080/admin`** (redirects to `/admin/ui/`). Log in with that password, or call `/admin/api/*` with **`X-API-Key`** (same as the main API) instead of a browser session. If the password env var is unset, admin routes return **404** (disabled). **`PUT /admin/api/save/{game_id}`** accepts the same query params as **`PUT /save/{game_id}`**; **`sha256`** may be omitted so the server hashes the body (needed for the admin UI on plain-HTTP LAN without Web Crypto).
+
+See **`admin-web/README.md`** for UI features.
 
 ## Data directory (`save_data/`)
 
@@ -56,9 +59,22 @@ By default this repo stores server data under **`save_data/` at the repository r
 
 **Changing location:** edit all three paths together (and migrate `saves/`, `index.json`, and `history/` if moving an existing install). Stop the server first and copy the data tree so blobs and index stay consistent.
 
+### Using a host folder that *another* app syncs (Syncthing, cloud drive, NAS, …)
+
+The server **only** sees normal files under **`SAVE_ROOT`** (and the index/history paths). It does **not** need to know about Dropbox or any other sync product.
+
+**Typical pattern:** On the Docker host, use a directory that your **other** software already mirrors—for example:
+
+- Bind mount **`/path/to/my-synced-folder`** to **`/data`** in **`docker-compose.yml`** (same idea as the default **`../save_data:/data`**), **or**
+- Set **`SAVE_ROOT`**, **`INDEX_PATH`**, and **`HISTORY_ROOT`** to paths that live **inside** a folder your sync tool manages.
+
+GBAsync reads and writes **`.sav`** blobs and **`index.json`**; the other app propagates **those files** wherever you configured it. Keep **`INDEX_PATH`** and **`SAVE_ROOT`** consistent (same install as documented above)—do not point only one of them at the synced folder without migrating the whole tree.
+
+If you need a **separate** directory of plain `.sav` files (not the server’s internal layout) that mirrors the API, use **`bridge.py`** on a desktop—see **`bridge/README.md`**.
+
 ## Run
 
-**Docker (from `server/`, repo-root `.env`):** see root `USER_GUIDE.md`. The image entrypoint runs **uvicorn** and optionally a Dropbox **sidecar** when `SAVESYNC_DROPBOX_MODE` is not `off`.
+**Docker (from `server/`, repo-root `.env`):** see **`docs/USER_GUIDE.md`**. The image entrypoint runs **`write_bridge_config`**, **uvicorn**, and (when **`GBASYNC_DROPBOX_MODE`** is not `off`, legacy name **`SAVESYNC_DROPBOX_MODE`**) a Dropbox **sidecar** that runs the configured bridge on an interval.
 
 **Local uvicorn:**
 

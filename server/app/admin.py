@@ -11,7 +11,7 @@ import secrets
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -24,8 +24,10 @@ from .models import (
     RestoreRequest,
     RevisionKeepPatch,
     RevisionLabelPatch,
+    SaveMeta,
     SaveOrderPut,
 )
+from .storage import SaveStore
 
 _log = logging.getLogger("gbasync.admin")
 
@@ -235,6 +237,81 @@ def admin_download_save(_: AdminDep, request: Request, game_id: str) -> Response
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{safe}.sav"'},
     )
+
+
+@router.put("/api/save/{game_id}")
+def admin_put_save(
+    _: AdminDep,
+    request: Request,
+    game_id: str,
+    body: bytes = Body(..., media_type="application/octet-stream"),
+    last_modified_utc: str = Query(...),
+    sha256: str | None = Query(
+        default=None,
+        description="Optional; if omitted the server hashes the body (for admin UI on non-HTTPS LAN without Web Crypto).",
+    ),
+    size_bytes: int = Query(...),
+    rom_sha1: str | None = Query(default=None),
+    filename_hint: str | None = Query(default=None),
+    platform_source: str | None = Query(default=None),
+    client_clock_utc: str | None = Query(default=None),
+    force: bool = Query(default=True),
+) -> JSONResponse:
+    """
+    Same semantics as ``PUT /save/{game_id}`` (client upload), but under ``/admin/api`` so the
+    static admin UI can upload bytes with the session cookie. Default ``force=true`` avoids
+    timestamp-only rejections when replacing from disk.
+    """
+    if not game_id or "/" in game_id or "\\" in game_id or game_id.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid game_id")
+    store = _get_store(request)
+    if len(body) != size_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="size_bytes mismatch")
+    computed_sha = hashlib.sha256(body).hexdigest()
+    if sha256 is not None and str(sha256).strip().lower() != computed_sha:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sha256 mismatch")
+    sha256 = computed_sha
+    if _client_debug_logging_enabled() and client_clock_utc:
+        _log.info(
+            "admin put_save client_clock game_id=%s last_modified_utc=%s client_clock_utc=%s platform_source=%s",
+            game_id,
+            last_modified_utc,
+            client_clock_utc,
+            platform_source,
+        )
+    meta = SaveMeta(
+        game_id=game_id,
+        last_modified_utc=last_modified_utc,
+        sha256=sha256,
+        size_bytes=size_bytes,
+        rom_sha1=rom_sha1,
+        filename_hint=filename_hint,
+        platform_source=platform_source,
+    )
+    try:
+        effective, conflict, applied, canonical_game_id = store.upsert(game_id, body, meta, force=force)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    from . import main as main_mod
+
+    if applied and main_mod._dropbox_sync_on_upload_enabled():
+        main_mod._schedule_dropbox_sync_after_upload()
+    _log.info("admin put_save game_id=%s canonical=%s applied=%s", game_id, canonical_game_id, applied)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "game_id": canonical_game_id,
+            "requested_game_id": game_id,
+            "saved": True,
+            "applied": applied,
+            "conflict": conflict,
+            "effective_meta": effective.model_dump(),
+        },
+    )
+
+
+def _client_debug_logging_enabled() -> bool:
+    return os.getenv("SAVE_SYNC_LOG_CLIENT_DEBUG", "").lower() in ("1", "true", "yes")
 
 
 @router.get("/api/save/{game_id}/history")
