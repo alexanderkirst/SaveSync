@@ -1,39 +1,38 @@
 # GBAsync
 
-**Keep one GBA save in sync across your devices**—your phone, your handhelds, and anything else you use to play. GBAsync is a small **self-hosted** service: you run a server that holds the “official” copy of each `.sav`, and **homebrew apps** on **Nintendo Switch** and **Nintendo 3DS** (plus an optional **Delta** / **Dropbox** path on iOS) push and pull saves when *you* choose—so you can pick up the same game on different hardware without emailing files or copying SD cards by hand.
+**Keep one GBA save in sync across your devices.** GBAsync is a small self-hosted service: you run a server that holds the authoritative copy of each `.sav`, and homebrew apps on **Nintendo Switch** and **Nintendo 3DS** push and pull saves when you choose. An optional Dropbox/Delta path covers iOS via Delta emulator.
 
 ---
 
 ## What you get
 
-- **One place for saves** — The server stores each game’s save file and metadata. Your devices sync **to** and **from** that source of truth.
-- **Works across emulators and real hardware targets** — Same idea whether you’re on Switch, 3DS, or (with the bridge) Delta on iPhone: **one shared system**, not a separate cloud per app.
-- **You stay in control** — **Self-hosted**: your machine, your network, your API keys. No vendor lock-in for *how* you sync GBA saves.
-- **Clear sync flows** — **Auto sync** walks through **plan → preview → apply** so you see what would change before it happens. **Upload-only** and **download-only** modes are there when you want a manual, per-game checklist.
-- **Per-game locks** — Mark games you don’t want touched in Auto, so a stray sync doesn’t overwrite something you care about.
-- **Status at a glance** — A small **status file** next to your saves shows last sync, whether the server was reachable, and Dropbox-related results when you use that integration.
-- **Conflicts handled explicitly** — If the copy on the device and the copy on the server both diverged, you get a **conflict** prompt instead of silent corruption.
-- **Optional web admin** — With a password set in config, you can open a simple **admin UI** in the browser (saves, conflicts, index tools, **save history** with restore and **keep** pins, optional actions). Handy for troubleshooting without SSH.
-- **Version history on the server** — Optional per-game backups when a save is replaced; configurable retention, **pin** favorites so they are not trimmed, and restore from the admin UI or from **Switch/3DS** (then pull the save down to the device).
+- **One source of truth** — The server stores each game's save and metadata. Your devices sync to and from it.
+- **Works across emulators and real hardware** — Switch, 3DS, or Delta on iPhone all share the same system, not a separate cloud per app.
+- **Self-hosted** — Your machine, your network, your API keys. No vendor lock-in.
+- **Deliberate sync flows** — Auto sync walks through **plan → preview → apply** so you see what would change before it happens. Upload-only and download-only modes are available for manual, per-game control.
+- **Per-game locks** — Mark games you don't want touched in Auto sync.
+- **Conflict handling** — If both the device and server copies diverged, you get a conflict prompt instead of silent corruption.
+- **Version history** — Optional per-game backups when a save is replaced; configurable retention, pin favorites to protect them from trimming, and restore from the admin UI or from Switch/3DS.
+- **Optional web admin** — A simple browser UI for browsing saves, resolving conflicts, managing history, and running index tools. No SSH required.
 
 ---
 
-## What it doesn’t try to be (yet)
+## Current limitations
 
-- Console clients talk to the server over **plain HTTP** in this build—**no TLS** on the device side yet.
-- Sync on Switch/3DS is **foreground**: you open the app and run a sync; it’s not a background daemon.
+- Console clients communicate over plain HTTP — no TLS on the device side yet.
+- Sync on Switch/3DS is foreground only; open the app and run it manually.
 
-Details and workarounds live in **`docs/USER_GUIDE.md`**.
+Details and workarounds are in **`docs/USER_GUIDE.md`**.
 
 ---
 
-## How it fits together (simple picture)
+## How it fits together
 
-1. You run the **GBAsync server** (usually with **Docker**). It stores save files and an index. With **Dropbox mode** enabled in `.env`, the **same container** can run the **bridge** logic for Delta/Harmony—no extra **bridge** package required on the server host.
-2. On **Switch** or **3DS**, you install the homebrew **client**, point it at your server in **`config.ini`**, and use the menus to sync.
-3. If you use **Delta** on iOS, you typically configure **Dropbox** + **`GBASYNC_DROPBOX_MODE=delta_api`** in the **server** `.env` so the container syncs the **Harmony** folder (see **`docs/USER_GUIDE.md`**). Only if you need a **separate** machine running the Python scripts **outside** Docker do you use the standalone **`bridge/`** repo folder or **`dist/bridge`** zip.
+1. Run the **GBAsync server** (usually with Docker). It stores save files and an index. With `GBASYNC_DROPBOX_MODE` set in `.env`, the same container handles the Delta/Harmony bridge — no separate installation needed.
+2. On **Switch** or **3DS**, install the homebrew client, point it at your server in `config.ini`, and use the menus to sync.
+3. If you use **Delta on iOS**, configure Dropbox + `GBASYNC_DROPBOX_MODE=delta_api` in the server `.env`. See **`docs/USER_GUIDE.md`** for the full Harmony setup.
 
-Repository layout for contributors: **`server/`** (API + optional **`admin-web/`** UI), **`switch-client/`**, **`3ds-client/`**, **`bridge/`** (also copied into the server Docker image).
+Repository layout: **`server/`** (API + optional `admin-web/` UI), **`switch-client/`**, **`3ds-client/`**, **`bridge/`** (also copied into the Docker image).
 
 ---
 
@@ -47,7 +46,7 @@ cd server
 docker compose up -d
 ```
 
-Saves and `index.json` live under **`save_data/`** at the **repo root** (see `server/docker-compose.yml`). Check health:
+Saves and `index.json` live under `save_data/` at the repo root. Check health:
 
 ```bash
 curl http://127.0.0.1:8080/health
@@ -55,13 +54,21 @@ curl http://127.0.0.1:8080/health
 
 **2. Install the console builds**
 
-Prebuilt artifacts are described in **`dist/README.md`**. Each console **zip** includes **`README.md`** and **`gba-sync/README.md`** (full **`config.ini`** reference); edit **`gba-sync/config.ini`** with your server URL and API key.
+Prebuilt artifacts are described in **`dist/README.md`**. Each console zip includes a full `config.ini` reference — edit it with your server URL and API key.
 
 **3. Optional — Delta / Dropbox**
 
-Only if you want the **server** to read/write **Delta’s Dropbox** (Harmony) or a **flat** `.sav` folder in Dropbox: set **`GBASYNC_DROPBOX_MODE`** and credentials in **`.env`** (see **`docs/USER_GUIDE.md`**). **Skip this** for Switch/3DS ↔ server only.
+To have the server read/write Delta's Dropbox (Harmony) folder, set `GBASYNC_DROPBOX_MODE` and credentials in `.env`. See **`docs/USER_GUIDE.md`**. Skip this for Switch/3DS ↔ server only.
 
-**You do not need** to install or unzip the **`bridge/`** release package when using **Docker** with Dropbox mode—the container already runs those scripts.
+---
+
+## Do I need the `bridge/` package?
+
+**Most users don't.** The Docker image already includes the bridge scripts, and Switch/3DS consoles talk directly to the server API with no bridge involved.
+
+You need the standalone `bridge/` tree (or `dist/bridge/gbasync-bridge-*.zip`) only if you want to run bridge scripts **outside Docker** — for example, watching a local `.sav` folder on a Mac/PC, or running `delta_dropbox_api_sync.py` on a separate always-on machine that doesn't run the GBAsync Docker image.
+
+See **`bridge/README.md`** for script details and **`docs/USER_GUIDE.md`** for Dropbox env vars.
 
 ---
 
@@ -70,22 +77,22 @@ Only if you want the **server** to read/write **Delta’s Dropbox** (Harmony) or
 | Doc | Purpose |
 |-----|---------|
 | **`docs/USER_GUIDE.md`** | Full setup: server, bridge, Switch, 3DS, Dropbox, troubleshooting |
-| **`docs/RELEASE_NOTES_v1.0.0.md`** | **v1.0.0** — full product summary for the first major release |
+| **`docs/RELEASE_NOTES_v1.0.0.md`** | v1.0.0 full product summary |
 | **`docs/RELEASE_NOTES_v0.1.*.md`** | Earlier incremental release notes |
-| **`dist/README.md`** | What’s in `dist/` release artifacts and how they map to installs |
-| **`admin-web/README.md`** | Optional admin UI (`/admin/ui/`) — auth, tabs, related server routes |
+| **`dist/README.md`** | Release artifacts and how they map to installs |
+| **`admin-web/README.md`** | Optional admin UI — auth, tabs, related server routes |
 | **`server/README.md`** | HTTP API summary and `save_data/` layout |
 | **`bridge/README.md`** | `bridge.py`, Harmony helpers, Delta ↔ server sync scripts |
-| **`docs/TODO.md`** | What’s shipped vs planned |
-| **`docs/HARDWARE_VALIDATION_CHECKLIST.md`** | Optional real-device test matrix (sync, conflicts, history) |
-| **`docs/CONSOLE_CLIENT_PERFORMANCE.md`** | Switch/3DS performance notes (HTTP, hashing, safe vs risky ideas) |
-| **`docs/RELEASE.md`** | Maintainer packaging (`./scripts/release-*.sh`) and release checklist |
+| **`docs/TODO.md`** | What's shipped vs planned |
+| **`docs/HARDWARE_VALIDATION_CHECKLIST.md`** | Real-device test matrix |
+| **`docs/CONSOLE_CLIENT_PERFORMANCE.md`** | Switch/3DS performance notes |
+| **`docs/RELEASE.md`** | Maintainer packaging and release checklist |
 
 ---
 
 ## Building from source
 
-Release scripts (from repo root; **devkitPro** required for Switch/3DS):
+Requires devkitPro for Switch/3DS builds:
 
 ```bash
 ./scripts/release-server.sh v1.0.0
@@ -94,7 +101,7 @@ Release scripts (from repo root; **devkitPro** required for Switch/3DS):
 ./scripts/release-3ds.sh v1.0.0
 ```
 
-Replace the tag with your release (e.g. `v1.0.0`). **Toolchain:** Python 3.11+ (server/bridge; Docker image uses 3.12), Docker (server), devkitPro (`devkitA64`/`libnx` for Switch, `devkitARM`/`libctru` for 3DS), plus 3DS packaging tools for **`./scripts/release-3ds.sh`** (`makerom`, `bannertool`; `sips` on macOS for banner assets). See **`docs/RELEASE.md`** for detail.
+**Toolchain:** Python 3.11+ (server/bridge; Docker image uses 3.12), Docker, devkitPro (`devkitA64`/`libnx` for Switch, `devkitARM`/`libctru` for 3DS), plus `makerom` and `bannertool` for 3DS packaging (`sips` on macOS for banner assets). See **`docs/RELEASE.md`** for details.
 
 **Smoke test:**
 
@@ -106,38 +113,10 @@ Replace the tag with your release (e.g. `v1.0.0`). **Toolchain:** Python 3.11+ (
 
 ## Contributing
 
-See **`docs/TODO.md`** for themes (e.g. HTTPS on consoles, richer admin UI, tests). Background context: **`docs/INITIAL_IDEA.md`**.
-
----
-
-## Server, Docker, and the `bridge/` folder (important)
-
-**Most users never install the bridge separately.**
-
-- If you run the **GBAsync server with Docker** (`cd server && docker compose up -d`) and set **`GBASYNC_DROPBOX_MODE`** to something other than `off` in your repo-root **`.env`**, the container already includes the **bridge Python scripts** under `/app/bridge`. The entrypoint runs **`write_bridge_config.py`** and a **sidecar** that periodically executes **`delta_dropbox_api_sync.py`** or **`dropbox_bridge.py`**—the same code as in the **`bridge/`** directory in this repo. **You do not need** to unzip `dist/bridge/…` on another machine for that setup.
-- **You also do not need** the bridge for **Switch ↔ server** or **3DS ↔ server** only. The consoles talk **HTTP** to the server API; no desktop bridge is involved.
-
-**When you *do* need the standalone `bridge/` tree (or `dist/bridge/gbasync-bridge-*.zip`):**
-
-- You want **`bridge.py`** to watch a **local folder** of plain `.sav` files on a **Mac/PC** (no Docker on that machine), and sync that folder with the server.
-- You run **`delta_folder_server_sync.py`** against a **locally synced** Delta Emulator folder (Dropbox desktop app) **outside** Docker.
-- You run **`delta_dropbox_api_sync.py`** or **`dropbox_bridge.py`** **manually** on a host that is **not** the Docker server (e.g. a small always-on box without the GBAsync image).
-
-**Optional web admin** (`admin-web/`) is bundled **inside** the Docker image as static files; no separate install.
-
-See **`bridge/README.md`** for script-by-script detail and **`docs/USER_GUIDE.md`** for Dropbox env vars and Harmony behavior.
-
-### Storing saves on disk (including folders synced by *other* apps)
-
-GBAsync is **not** tied to Dropbox for where files live on your machine:
-
-- The **server** writes blobs under **`SAVE_ROOT`** and metadata under **`INDEX_PATH`** / **`HISTORY_ROOT`**. Those paths are **ordinary directories**. You can **bind-mount** (Docker) or point env vars at a folder that **Syncthing**, **Resilio**, **iCloud Drive**, **NFS**, or any other tool keeps in sync—GBAsync just reads/writes files there; the other app handles replication.
-- If you want a **second** tree of **plain `.sav` files** (for another workflow) that tracks the server, run **`bridge.py`** on a PC/Mac and set **`delta_save_dir`** to a local folder; point that folder at whatever sync tool you use. See **`bridge/README.md`** (“Local copies…”).
-
-**Dropbox-specific** scripts (`delta_dropbox_api_sync.py`, etc.) are only for **Dropbox’s API** or **Harmony** layout—not required for “save to my disk / my sync folder.”
+See **`docs/TODO.md`** for open themes (HTTPS on consoles, richer admin UI, tests). Background context: **`docs/INITIAL_IDEA.md`**.
 
 ---
 
 ## License
 
-This project is licensed under the **GBAsync Non-Commercial License 1.0**. See **`LICENSE`**.
+Licensed under the **GBAsync Non-Commercial License 1.0**. See `LICENSE`.
