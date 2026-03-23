@@ -84,6 +84,7 @@ See **`bridge/README.md`** for script details and **`docs/USER_GUIDE.md`** for D
 | **`server/README.md`** | HTTP API summary and `save_data/` layout |
 | **`bridge/README.md`** | `bridge.py`, Harmony helpers, Delta ↔ server sync scripts |
 | **`docs/TODO.md`** | What's shipped vs planned |
+| **`docs/IDEAS_AND_FUTURE_FEATURES.md`** | User-facing feature ideas & future polish (not a roadmap) |
 | **`docs/HARDWARE_VALIDATION_CHECKLIST.md`** | Real-device test matrix |
 | **`docs/CONSOLE_CLIENT_PERFORMANCE.md`** | Switch/3DS performance notes |
 | **`docs/RELEASE.md`** | Maintainer packaging and release checklist |
@@ -113,7 +114,7 @@ Requires devkitPro for Switch/3DS builds:
 
 ## Contributing
 
-See **`docs/TODO.md`** for open themes (HTTPS on consoles, richer admin UI, tests). Background context: **`docs/INITIAL_IDEA.md`**.
+See **`docs/TODO.md`** for open themes (HTTPS on consoles, richer admin UI, tests). Casual user-perspective ideas: **`docs/IDEAS_AND_FUTURE_FEATURES.md`**. Background: **`docs/INITIAL_IDEA.md`**.
 
 ---
 

@@ -15,7 +15,7 @@ Static browser UI for operating a running **GBAsync server** (dashboard, saves, 
 | **Slot map** | If **`GBASYNC_SLOT_MAP_PATH`** (or legacy **`SAVESYNC_SLOT_MAP_PATH`**) points at a JSON file the server can read, shows path and parsed JSON; otherwise explains that it is optional. |
 | **Actions** | **Run Dropbox sync once** (`POST /admin/api/dropbox/sync-once`), **resolve conflict** by `game_id`, **delete save** (type `game_id` twice to confirm). |
 
-**Upload behavior:** the UI calls **`PUT /admin/api/save/{game_id}`** with the file bytes. On **HTTPS** or **localhost**, the browser computes **SHA-256**; on **plain HTTP** to a LAN IP, **Web Crypto** may be unavailable — the client **omits** `sha256` in the query and the **server** hashes the body (see **`server/app/admin.py`**). A **fixed** top banner shows **Uploading…** / errors; **Upload complete** uses a **modal** (or **`alert`** if the modal markup is missing).
+**Upload behavior:** the UI calls **`PUT /admin/api/save/{game_id}`** with the file bytes. **`filename_hint`** is always **`{game_id}.sav`** (the row you clicked), not the file’s name on disk—so importing e.g. `unbound-0424.sav` into the **`unbound`** row does not register a second `game_id` from the filename. On **HTTPS** or **localhost**, the browser computes **SHA-256**; on **plain HTTP** to a LAN IP, **Web Crypto** may be unavailable — the client **omits** `sha256` in the query and the **server** hashes the body (see **`server/app/admin.py`**). A **fixed** top banner shows **Uploading…** / errors; **Upload complete** uses a **modal** (or **`alert`** if the modal markup is missing).
 
 ---
 

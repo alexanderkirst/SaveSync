@@ -83,7 +83,9 @@ async function uploadSaveFromFile(gameId, file) {
     shaClient = await sha256Hex(bytes);
     qs.set("sha256", shaClient);
   }
-  if (file.name) qs.set("filename_hint", file.name);
+  // Row-targeted replace: hint must match this game's server key, not the disk filename (e.g.
+  // importing unbound-0424.sav into the "unbound" row must not register a second identity).
+  qs.set("filename_hint", `${gameId}.sav`);
   const r = await fetch(`${API}/save/${encodeURIComponent(gameId)}?${qs}`, {
     method: "PUT",
     credentials: "include",
