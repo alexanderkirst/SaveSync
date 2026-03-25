@@ -43,12 +43,12 @@ GBAsync’s `apply_bytes_to_delta` rewrites `remoteIdentifier` so its basename m
 
 **Timestamp tug-of-war:** `server_delta` merge picks the newer of GBAsync’s `server_updated_at` and Delta’s `record.modifiedDate`. Resolving conflicts in Delta often **bumps** `modifiedDate` to “now”, so Dropbox can look **newer** than a fresh 3DS upload and the bridge will skip pushing server bytes to Dropbox—or even PUT Delta back onto the server.
 
-For two-way mode (`SAVESYNC_SERVER_DELTA_ONE_WAY=false`), use guardrails:
+For two-way mode (`SAVESYNC_SERVER_DELTA_ONE_WAY=false` or legacy **`SAVESYNC_SERVER_DELTA_ONE_WAY`**), tune guardrails (Docker: **`GBASYNC_*`** names in repo-root **`.env`**; **`write_bridge_config`** copies them into the bridge JSON):
 
-- `SAVESYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS=900`
-- `SAVESYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS=3600`
+- **`…MIN_DELTA_WIN_SECONDS`:** Delta must lead the server comparison time by at least this many seconds to win. **`0`** = no margin (**fastest** Switch/phone handoff). **Risk:** Harmony **`modifiedDate`** can incorrectly beat a **just-uploaded** hardware save.
+- **`…RECENT_SERVER_PROTECT_SECONDS`:** When > **`0`**, a **recent** server-side timestamp resists being overwritten by Delta. **`0`** = disable (**snappier**). **Risk:** without it, a **stale** tree right after a **Dropbox pull** (phone still uploading) can overwrite a **newer** server copy.
 
-This keeps two-way sync while preventing immediate flip-backs after opening Delta.
+**Conservative starting values** (slower handoff, fewer surprises): **`900`** and **`3600`**. See **`docs/USER_GUIDE.md`** for full detail.
 
 **Crash on launch:** If both ``GameSave-{id}`` **and** ``gamesave-{id}`` JSON exist (or multiple ``*-gameSave`` spellings), updating **only one** leaves inconsistent metadata vs the RAM blob. GBAsync’s ``apply_bytes_to_delta`` now writes **all** matching blob paths and **all** JSON sidecars with the same content. If Delta still crashes, restore the **Delta Emulator** folder from Dropbox version history to before the bad sync, or remove a corrupted game’s ``GameSave-*`` / ``gamesave-*`` pair (e.g. a hack that previously received the wrong ROM’s save bytes).
 - **Wrong `id`**: Importing into the wrong `GameSave-*` corrupts another game.

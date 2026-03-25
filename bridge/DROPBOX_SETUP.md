@@ -18,7 +18,10 @@ If you run **`docker compose`** from `server/`, you can enable Dropbox without i
 
 The entrypoint runs **`write_bridge_config`**, starts **uvicorn**, and a small **sidecar** that runs the chosen bridge on **`GBASYNC_DROPBOX_INTERVAL_SECONDS`** (min 10s).
 
-For stable Delta two-way mode (`GBASYNC_SERVER_DELTA_ONE_WAY=false`), example starting values:
+For Delta two-way mode (`GBASYNC_SERVER_DELTA_ONE_WAY=false`), **`GBASYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS`** and **`GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS`** control how aggressively the merge favors the server vs Harmony timestamps.
+
+- **Fastest phone ↔ console handoff:** set both to **`0`**, rebuild/restart Compose so **`write_bridge_config`** picks this up. **Tradeoffs:** noisy Harmony **`modifiedDate`** can beat a fresh device upload, and a Dropbox **pull** can still be **behind** the phone—you get quicker “Delta wins” but slightly higher risk of **wrong-way** overwrites. See **`docs/USER_GUIDE.md`** (Delta two-way behavior).
+- **Conservative defaults** (fewer timestamp / upload-lag surprises, slower handoff):
 
 ```env
 GBASYNC_DROPBOX_INTERVAL_SECONDS=120

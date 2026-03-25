@@ -134,8 +134,8 @@ Configure **one** auth method. Scopes typically include **files.metadata.read** 
 | **`GBASYNC_DELTA_SYNC_MODE`** | No | `server_delta` | **`triple`** or **`server_delta`** — passed to **`delta_dropbox_api_sync.py`** (three-way vs server–Delta merge). |
 | **`GBASYNC_DELTA_SLOT_MAP_PATH`** | No | `/data/delta-slot-map.json` in generated config | Harmony **slot map** path inside the container. |
 | **`GBASYNC_SERVER_DELTA_ONE_WAY`** | No | see below | **`false`** / **`0`** — two-way guardrails (Harmony timestamps can block server→Dropbox). **`true`** / **`1`** — when server and Dropbox bytes differ, prefer pushing server → Delta. If unset or invalid, **`write_bridge_config`** defaults **`server_delta_one_way`** to **`true`** (see **`server/write_bridge_config.py`**). |
-| **`GBASYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS`** | No | — | Guardrail: minimum seconds before Delta’s **`modifiedDate`** can “win” in two-way flows (integer ≥ 0). |
-| **`GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS`** | No | — | Guardrail: recent server uploads protected for this many seconds (integer ≥ 0). |
+| **`GBASYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS`** | No | Omit → **0** (not written to bridge JSON; see **`write_bridge_config.py`**) | In two-way mode, Delta only wins if **`modifiedDate`** is at least this many seconds **ahead of** the server comparison time. **`0`** = no margin (fastest phone ↔ console handoff; see **Delta two-way behavior** below for risks). Larger values (e.g. **900**) reduce bogus Delta “wins” from noisy Harmony timestamps. |
+| **`GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS`** | No | Omit → **0** | In two-way mode, if the server copy would lose but its stored timestamp is **newer than “now” minus this many seconds**, keep the server as winner. **`0`** disables this bias (snappier handoff; see risks below). Larger values (e.g. **3600**) reduce overwriting a **fresh server save** with a **stale Dropbox pull** (phone not finished uploading). |
 
 For behavior of the merge and first-time conflicts, see **§ Delta two-way behavior** under **[3) Configure and run Delta bridge](#3-configure-and-run-delta-bridge)**.
 
@@ -218,7 +218,18 @@ Run on a schedule if you want it to stay current. Leave the **Dropbox desktop cl
 
 If Delta and server histories already diverged, Delta can show a **one-time conflict chooser** the first time you reconnect the flows. Choose the side you want (typically **Cloud** right after a 3DS/Switch upload), then normal Auto sync should settle.
 
-For stable two-way (`GBASYNC_SERVER_DELTA_ONE_WAY=false`), use guardrails like:
+For two-way mode (`GBASYNC_SERVER_DELTA_ONE_WAY=false`), tune **`GBASYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS`** and **`GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS`**:
+
+**Faster device switching (phone ↔ Switch/3DS)** — set both to **`0`** and restart the container so **`write_bridge_config`** regenerates **`/tmp/gbasync-delta-api.json`**:
+
+```env
+GBASYNC_SERVER_DELTA_MIN_DELTA_WIN_SECONDS=0
+GBASYNC_SERVER_DELTA_RECENT_SERVER_PROTECT_SECONDS=0
+```
+
+**Risks with `0`:** Harmony’s **`modifiedDate`** can edge ahead of a **just-uploaded** console save, so Delta may **win** and **push phone bytes onto the server** when you expected hardware to win. **`RECENT_SERVER_PROTECT`** at **`0`** also means **less** shielding when the bridge **pulls Dropbox before** the phone has finished uploading—merge can treat an **older** cloud tree as “Delta” and overwrite a **newer** server copy. If you see wrong-way sync after quick device switching, raise these values (or use upload-triggered sync + a short interval so pulls happen after uploads settle).
+
+**More conservative (fewer timestamp / Dropbox-lag surprises)** — non-zero guardrails and a short sidecar interval, for example:
 
 ```env
 GBASYNC_DROPBOX_INTERVAL_SECONDS=120

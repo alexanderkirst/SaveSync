@@ -52,7 +52,7 @@ store = SaveStore(
     history_max_per_game=HISTORY_MAX_PER_GAME,
 )
 
-app = FastAPI(title="GBAsync Server", version="1.0.0")
+app = FastAPI(title="GBAsync Server", version="1.1.0")
 
 
 def _configure_gbasync_logging() -> None:
