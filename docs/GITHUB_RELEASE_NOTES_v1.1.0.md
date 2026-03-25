@@ -34,14 +34,6 @@ Fixes and small features across **admin web**, **server**, **Switch**, and **3DS
 - **Config path** — Single **`GBASYNC_3DS_CONFIG_PATH`** define for **`sdmc:/3ds/gba-sync/config.ini`**.
 - **HTTP** — **3 attempts**, **1s** backoff on transient failures.
 
-### Not in v1.1.0 (from internal review)
-
-- **TLS / HTTPS** on 3DS/Switch — not implemented; API key remains on the wire for plain HTTP.
-- **Shared scroll-list abstraction** for save viewer / pickers — still duplicated C code; refactor left for a later pass.
-- **Global API rate limiting** — not added; upload size cap only.
-
----
-
 ## Upgrade notes
 
 - **Server** — Set **`GBASYNC_MAX_SAVE_UPLOAD_BYTES`** if you need something other than 4 MiB. Deploy the new **`server/`** code (or image).
