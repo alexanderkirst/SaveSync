@@ -508,14 +508,26 @@ input:focus {
   max-width: 40rem;
 }
 
-@media (max-width: 520px) {
+/* Narrow screens: stack search + Save row order; disable flex-grow on search (was stretching empty space). */
+@media (max-width: 640px) {
   .filter-row--saves {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.45rem;
+    margin-bottom: 0.65rem;
+  }
+
+  .filter-saves-search {
+    flex: 0 0 auto;
+    width: 100%;
   }
 
   .btn-save-order {
     width: 100%;
+  }
+
+  .hint--saves {
+    margin-bottom: 0.55rem;
   }
 }
 
@@ -970,7 +982,10 @@ tbody tr:hover td {
 }
 
 .modal-panel--history {
-  padding-bottom: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 1rem;
 }
 
 .modal-panel--confirm {
@@ -1016,8 +1031,43 @@ tbody tr:hover td {
   margin-top: 0.15rem;
 }
 
+.history-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  padding-bottom: 0.85rem;
+  margin-bottom: 0.35rem;
+  border-bottom: 0.5px solid var(--separator);
+}
+
+.history-modal-header h3 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  line-height: 1.25;
+}
+
+.history-modal-done {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0.5rem 1.1rem;
+  width: auto;
+}
+
+.history-modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .modal-panel--history .history-entries-scroll {
-  max-height: min(52vh, 420px);
+  flex: 1 1 auto;
+  min-height: 8rem;
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -1087,22 +1137,14 @@ tbody tr:hover td {
   letter-spacing: -0.02em;
 }
 
-.modal-panel--history h3 {
-  margin: 0 0 0.75rem;
-}
-
 .modal-panel .hint {
   margin-top: 1rem;
   margin-bottom: 1rem;
 }
 
 .modal-panel--history .history-modal-hint {
-  margin: 0.75rem 0 0.5rem;
-}
-
-#history-close {
-  width: 100%;
-  margin-top: 0.35rem;
+  flex-shrink: 0;
+  margin: 0.65rem 0 0;
 }
 
 .modal-panel .table-wrap {
@@ -1126,10 +1168,6 @@ tbody tr:hover td {
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
     animation: sheetUp 0.28s cubic-bezier(0.32, 0.72, 0, 1);
-  }
-
-  .modal-panel--history .history-entries-scroll {
-    max-height: min(68vh, 620px);
   }
 }
 

@@ -1,5 +1,4 @@
 #include <switch.h>
-#include <switch/services/spsm.h>
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -2480,9 +2479,7 @@ static std::vector<std::string> run_sync(
     Config& cfg,
     SyncAction action,
     const SyncManualFilter* xy_filter,
-    PadState* pad,
-    bool* out_already_up_to_date) {
-  if (out_already_up_to_date) *out_already_up_to_date = false;
+    PadState* pad) {
   std::vector<std::string> logs;
   if (action == SyncAction::Auto) {
     printf("\n");
@@ -2578,7 +2575,6 @@ static std::vector<std::string> run_sync(
     sync_status_after_server_work(cfg, true, true, "");
     logs.push_back("");
     logs.push_back("Already Up To Date");
-    if (out_already_up_to_date) *out_already_up_to_date = true;
     return logs;
   }
 
@@ -2694,27 +2690,12 @@ static bool choose_action(PadState* pad, SyncAction* out_action) {
   return false;
 }
 
-static void wait_after_sync_switch(PadState* pad, bool* quit_app, bool can_reboot) {
-  if (can_reboot) {
-    printf("\nA: main menu   Y: reboot now   +: exit app\n");
-  } else {
-    printf("\nA: main menu   +: exit app\n");
-  }
+static void wait_after_sync_switch(PadState* pad, bool* quit_app) {
+  printf("\nA: main menu   +: exit app\n");
   while (appletMainLoop()) {
     padUpdate(pad);
     const u64 down = padGetButtonsDown(pad);
     if (down & HidNpadButton_A) return;
-    if (can_reboot && (down & HidNpadButton_Y)) {
-      printf("Rebooting...\n");
-      consoleUpdate(NULL);
-      Result rc = spsmInitialize();
-      if (R_SUCCEEDED(rc)) {
-        (void)spsmShutdown(true);
-        spsmExit();
-      }
-      *quit_app = true;
-      return;
-    }
     if (down & HidNpadButton_Plus) {
       *quit_app = true;
       return;
@@ -2791,19 +2772,18 @@ int main(int argc, char** argv) {
         continue;
       } else if (action == SyncAction::UploadOnly) {
         if (!pick_upload_selection(&pad, cfg, &xy)) continue;
-        sync_logs = run_sync(cfg, action, &xy, &pad, nullptr);
+        sync_logs = run_sync(cfg, action, &xy, &pad);
       } else if (action == SyncAction::DownloadOnly) {
         if (!pick_download_selection(&pad, cfg, &xy)) continue;
-        sync_logs = run_sync(cfg, action, &xy, &pad, nullptr);
+        sync_logs = run_sync(cfg, action, &xy, &pad);
       } else {
-        bool already_up_to_date = false;
-        sync_logs = run_sync(cfg, action, nullptr, &pad, &already_up_to_date);
+        sync_logs = run_sync(cfg, action, nullptr, &pad);
         for (const auto& line : sync_logs) printf("%s\n", line.c_str());
-        wait_after_sync_switch(&pad, &quit_app, already_up_to_date);
+        wait_after_sync_switch(&pad, &quit_app);
         continue;
       }
       for (const auto& line : sync_logs) printf("%s\n", line.c_str());
-      wait_after_sync_switch(&pad, &quit_app, false);
+      wait_after_sync_switch(&pad, &quit_app);
     }
   }
   for (const auto& line : logs) printf("%s\n", line.c_str());

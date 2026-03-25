@@ -62,7 +62,7 @@ Nintendo **Switch** homebrew app that syncs **`.sav`** files with a **GBAsync se
 7. **Upload (X)** / **download (Y)** pickers with checklist; **+** runs, **B** back
 8. **`.gbasync-status`** — last sync / server / Dropbox (next to first save root’s baseline)
 9. **`locked_ids`** — skipped on Auto; toggled from **Save viewer**; writes **`config.ini`**
-10. **Post-sync** — **A** menu, **+** exit; **Y: reboot** after **Already Up To Date** Auto (uses **`spsm`**)
+10. **Post-sync** — **A** main menu, **+** exit app
 11. **Atomic** download writes; resilient HTTP (chunked, **`Accept-Encoding: identity`**, etc.)
 12. **`sync_nds_saves`** — when **`false`**, **512 KiB** saves treated as DS in mixed folders; **`nds_rom_dir`** skips stems with matching **`.nds`**; see **`skip_save_patterns`** for edge cases
 

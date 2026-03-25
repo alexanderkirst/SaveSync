@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#000000" />
   <meta name="color-scheme" content="dark" />
   <title>GBAsync Admin</title>
-  <link rel="stylesheet" href="styles.css?v=12" />
+  <link rel="stylesheet" href="styles.css?v=14" />
 </head>
 <body>
   <header class="top">
@@ -194,15 +194,19 @@
   <div id="history-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="history-modal-title">
     <div class="modal-backdrop" aria-hidden="true"></div>
     <div class="modal-panel modal-panel--history">
-      <h3 id="history-modal-title">History</h3>
-      <div class="history-entries-scroll">
-        <div id="history-entries" class="history-entries" role="list"></div>
+      <div class="history-modal-header">
+        <h3 id="history-modal-title">History</h3>
+        <button type="button" id="history-close" class="btn-primary history-modal-done">Done</button>
       </div>
-      <p class="hint history-modal-hint">Restoring sets that revision as the active server save; the current file is archived first. <strong>Keep</strong> pins a backup so it is not deleted when history exceeds the max count. <strong>Modified</strong> is from the file on disk; <strong>Index time</strong> is the server’s index timestamp when that backup was created (from the filename).</p>
-      <button type="button" id="history-close">Done</button>
+      <div class="history-modal-body">
+        <div class="history-entries-scroll">
+          <div id="history-entries" class="history-entries" role="list"></div>
+        </div>
+        <p class="hint history-modal-hint">Restoring sets that revision as the active server save; the current file is archived first. <strong>Keep</strong> pins a backup so it is not deleted when history exceeds the max count. <strong>Modified</strong> is from the file on disk; <strong>Index time</strong> is the server’s index timestamp when that backup was created (from the filename).</p>
+      </div>
     </div>
   </div>
 
-  <script src="app.js?v=13"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>
